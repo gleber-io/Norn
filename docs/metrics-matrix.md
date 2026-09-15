@@ -53,12 +53,32 @@ assinatura, mesmo que existam no Prometheus.
 | Reservas de estoque | `norn_shop_catalog_stock_reservations_total` | `sum by (outcome) (rate(norn_shop_catalog_stock_reservations_total[1m]))` | Catalog.API | OTLP | volume de negócio — sem SLO | n/a | Não |
 | Pagamentos processados | `norn_shop_payments_processed_total` | `sum by (outcome) (rate(norn_shop_payments_processed_total[1m]))` | Payment.API | OTLP (Fase 3, tarefa 8) | volume de negócio — sem SLO | n/a | Não |
 | Pagamentos degradados | `norn_shop_payments_degraded_total` | `rate(norn_shop_payments_degraded_total[1m])` | Payment.API | OTLP | conta ativações de `payment.gateway.bypass` (§5.4/§5.7) — sem SLO | n/a | Não |
-| Memória de container | `container_memory_working_set_bytes` | `container_memory_working_set_bytes{namespace="norn-shop"}` | Catalog\|Order\|Payment (Pods) | **cAdvisor** — pendente de cluster (Fase 6, tarefa 5a) | overhead do Norn (§3) — sem SLO próprio | n/a | Não |
-| CPU de container | `container_cpu_usage_seconds_total` | `rate(container_cpu_usage_seconds_total{namespace="norn-shop"}[1m])` | Catalog\|Order\|Payment (Pods) | **cAdvisor** — pendente de cluster (Fase 6, tarefa 5a) | overhead do Norn (§3) — sem SLO próprio | n/a | Não |
-| Eventos de OOM | `container_oom_events_total` | `increase(container_oom_events_total{namespace="norn-shop"}[1m])` | Catalog.API (Pod, alvo de F1) | **cAdvisor** — pendente de cluster (Fase 6, tarefa 5a) | define onset do F1 junto com a taxa de 5xx (§3) | binário: 0 = sem evento; ≥1 = onset | Não — usado no rotulador, não no `RuleEngine` |
+| Memória de container | `container_memory_working_set_bytes` | `container_memory_working_set_bytes{namespace="norn-shop"}` | Catalog\|Order\|Payment (Pods) | **cAdvisor** (Fase 6, tarefa 5a) | overhead do Norn (§3) — sem SLO próprio | n/a | Não |
+| CPU de container | `container_cpu_usage_seconds_total` | `rate(container_cpu_usage_seconds_total{namespace="norn-shop"}[1m])` | Catalog\|Order\|Payment (Pods) | **cAdvisor** (Fase 6, tarefa 5a) | overhead do Norn (§3) — sem SLO próprio | n/a | Não |
+| Eventos de OOM | `container_oom_events_total` | `increase(container_oom_events_total{namespace="norn-shop"}[1m])` | Catalog.API (Pod, alvo de F1) | **cAdvisor** (Fase 6, tarefa 5a) — **não observável neste ambiente, ver nota abaixo** | define onset do F1 junto com a taxa de 5xx (§3) | binário: 0 = sem evento; ≥1 = onset | Não — usado no rotulador, não no `RuleEngine` |
 
-**Linhas de fonte cAdvisor** (as três últimas) estão escritas e **pendentes de cluster** por
-desenho — o DoD desta fase declara essa exceção explicitamente; validam-se no DoD da Fase 6.
+**Memória e CPU de container fecham o DoD da Fase 6** — séries não-vazias por Pod, validadas em
+15/09/2026 com o cluster k3d real.
+
+**`container_oom_events_total` não fecha — causa raiz identificada, não é falha de configuração.**
+Testado em 15/09/2026: `OOMKilled` real e repetido no Catalog.API (confirmado por
+`kubectl get pod -o jsonpath='{.status.containerStatuses[0].lastState.terminated}'` →
+`reason: OOMKilled, exitCode: 137`, e por leitura direta de `memory.events` no cgroup do nó). A
+métrica do cAdvisor fica em zero mesmo assim. Investigação eliminou a hipótese óbvia (cgroup v1 do
+Docker Desktop — corrigida via reprovisionamento completo da VM, confirmada em v2) e chegou à causa
+real: **o containerd remove o cgroup do container morto antes de o cAdvisor/Prometheus conseguirem
+ler `oom_kill=1` nele.** No momento em que se inspeciona `/sys/fs/cgroup/kubepods/.../<container>/memory.events`
+após um `OOMKilled`, só existe mais o diretório do container **novo** (que kubelet já recriou), com
+`oom_kill 0` — o diretório do container morto já foi coletado. Isso independe do scrape interval do
+Prometheus (5s) — é limpeza de cgroup pelo runtime, não timing de coleta.
+
+**Consequência para a Fase 7 (rotulador de onset).** A definição de onset do F1 na §3 não pode
+depender de `container_oom_events_total` neste ambiente local (k3d aninhado em Docker Desktop/WSL2).
+Alternativa a decidir na Fase 7: usar `reason=OOMKilled` do `status.containerStatuses` do próprio
+Pod (via `Norn.Monitor`/`KubernetesClient`, verbo `get` já concedido pela `Role` do ADR-03) como sinal
+de onset equivalente — a informação existe e é confiável, só não passa pelo caminho Prometheus. Isto
+não é uma mudança de arquitetura, é uma correção da fonte de um sinal já previsto; revisar antes do
+piloto da Fase 12.
 
 ## 3. Exemplars métrica → trace — validado ponta a ponta em 15/09/2026
 

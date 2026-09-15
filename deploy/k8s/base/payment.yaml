@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-api
+  namespace: norn-shop
+  labels:
+    app: payment-api
+spec:
+  replicas: 1 # baseline do kustomize base (tarefa 4)
+  selector:
+    matchLabels:
+      app: payment-api
+  template:
+    metadata:
+      labels:
+        app: payment-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 5678
+      containers:
+        - name: payment-api
+          image: norn-shop-payment-api:placeholder
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: shop-common-config
+            - secretRef:
+                name: shop-common-secret
+            - secretRef:
+                name: payment-db-secret
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: dataprotection-keys
+              mountPath: /home/nornapp/.aspnet/DataProtection-Keys
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: dataprotection-keys
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-api
+  namespace: norn-shop
+spec:
+  selector:
+    app: payment-api
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: ClusterIP # sem tráfego externo direto — só eventos via RabbitMQ (§5.1)
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payment-api
+  namespace: norn-shop
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: payment-api

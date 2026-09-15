@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespaces.yaml
+  - rbac-norn.yaml
+  - cadvisor-scrape-rbac.yaml
+  - network-policy.yaml
+  - config.yaml
+  - catalog.yaml
+  - order.yaml
+  - payment.yaml
+
+# bootstrap.ps1 substitui as tags "placeholder" pelo SHA do commit em build (7.4:
+# "imagens com tag imutável, nunca latest") via `kustomize edit set image`.
+images:
+  - name: norn-shop-catalog-api
+    newName: norn-shop-catalog-api
+    newTag: placeholder
+  - name: norn-shop-order-api
+    newName: norn-shop-order-api
+    newTag: placeholder
+  - name: norn-shop-payment-api
+    newName: norn-shop-payment-api
+    newTag: placeholder

@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# Prefixo do registry local do k3d (tarefa 1) — bootstrap.ps1 substitui as tags
+# "placeholder" pelo SHA do commit (via `kustomize edit set image`, rodado aqui)
+# antes de aplicar.
+images:
+  - name: norn-shop-catalog-api
+    newName: k3d-norn-registry:5000/norn-shop-catalog-api
+    newTag: placeholder
+  - name: norn-shop-order-api
+    newName: k3d-norn-registry:5000/norn-shop-order-api
+    newTag: placeholder
+  - name: norn-shop-payment-api
+    newName: k3d-norn-registry:5000/norn-shop-payment-api
+    newTag: placeholder

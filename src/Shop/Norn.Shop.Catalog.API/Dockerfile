@@ -9,6 +9,7 @@ COPY src/Shop/Norn.Shop.Contracts/Norn.Shop.Contracts.csproj src/Shop/Norn.Shop.
 COPY src/BuildingBlocks/Norn.BuildingBlocks.Telemetry/Norn.BuildingBlocks.Telemetry.csproj src/BuildingBlocks/Norn.BuildingBlocks.Telemetry/
 COPY src/BuildingBlocks/Norn.BuildingBlocks.Web/Norn.BuildingBlocks.Web.csproj src/BuildingBlocks/Norn.BuildingBlocks.Web/
 COPY src/BuildingBlocks/Norn.BuildingBlocks.Messaging/Norn.BuildingBlocks.Messaging.csproj src/BuildingBlocks/Norn.BuildingBlocks.Messaging/
+COPY src/BuildingBlocks/Norn.BuildingBlocks.Chaos/Norn.BuildingBlocks.Chaos.csproj src/BuildingBlocks/Norn.BuildingBlocks.Chaos/
 RUN dotnet restore src/Shop/Norn.Shop.Catalog.API/Norn.Shop.Catalog.API.csproj --locked-mode -r linux-x64
 
 COPY src/Shop/Norn.Shop.Catalog.API/ src/Shop/Norn.Shop.Catalog.API/
@@ -16,6 +17,7 @@ COPY src/Shop/Norn.Shop.Contracts/ src/Shop/Norn.Shop.Contracts/
 COPY src/BuildingBlocks/Norn.BuildingBlocks.Telemetry/ src/BuildingBlocks/Norn.BuildingBlocks.Telemetry/
 COPY src/BuildingBlocks/Norn.BuildingBlocks.Web/ src/BuildingBlocks/Norn.BuildingBlocks.Web/
 COPY src/BuildingBlocks/Norn.BuildingBlocks.Messaging/ src/BuildingBlocks/Norn.BuildingBlocks.Messaging/
+COPY src/BuildingBlocks/Norn.BuildingBlocks.Chaos/ src/BuildingBlocks/Norn.BuildingBlocks.Chaos/
 
 RUN dotnet publish src/Shop/Norn.Shop.Catalog.API/Norn.Shop.Catalog.API.csproj \
     -c Release -r linux-x64 --self-contained true --no-restore -o /app

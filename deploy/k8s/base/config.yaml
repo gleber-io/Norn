@@ -1,0 +1,51 @@
+# Dependências externas (PostgreSQL, RabbitMQ, Redis, Collector OTLP) vivem fora
+# do cluster (ADR-09, ADR-10, tarefa 5 da Fase 6) — alcançadas por host.k3d.internal,
+# o mesmo endereço que o Ollama já usa a partir do host Windows.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-common-config
+  namespace: norn-shop
+data:
+  RabbitMq__Host: "host.k3d.internal"
+  RabbitMq__Username: "norn"
+  Redis__ConnectionString: "host.k3d.internal:6379"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://host.k3d.internal:4317"
+  # Não-produtivo: mantém /admin/chaos mapeado (Program.cs guarda por !IsProduction()).
+  ASPNETCORE_ENVIRONMENT: "Development"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: shop-common-secret
+  namespace: norn-shop
+type: Opaque
+stringData:
+  RabbitMq__Password: "norn"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: catalog-db-secret
+  namespace: norn-shop
+type: Opaque
+stringData:
+  ConnectionStrings__Catalog: "Host=host.k3d.internal;Database=norn;Username=norn;Password=norn"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: order-db-secret
+  namespace: norn-shop
+type: Opaque
+stringData:
+  ConnectionStrings__Order: "Host=host.k3d.internal;Database=norn;Username=norn;Password=norn"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: payment-db-secret
+  namespace: norn-shop
+type: Opaque
+stringData:
+  ConnectionStrings__Payment: "Host=host.k3d.internal;Database=norn;Username=norn;Password=norn"

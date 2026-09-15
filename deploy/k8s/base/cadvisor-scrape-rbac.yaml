@@ -1,0 +1,45 @@
+# Tarefa 5a da Fase 6: única fonte de métrica de container (container_oom_events_total,
+# container_memory_working_set_bytes, container_cpu_usage_seconds_total). O Prometheus
+# vive fora do cluster (ADR-10) e escreve para dentro via o endpoint /metrics/cadvisor
+# do kubelet, autenticado por este ServiceAccount. Fica em norn-platform: não é parte
+# do sistema gerenciado nem do catálogo de ações do Norn (ADR-03) — é ferramental de
+# observabilidade, como o próprio Prometheus.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-cadvisor-reader
+  namespace: norn-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-cadvisor-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-cadvisor-reader
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-cadvisor-reader
+    namespace: norn-platform
+roleRef:
+  kind: ClusterRole
+  name: prometheus-cadvisor-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# Secret de token clássico (não expira): o Prometheus roda fora do cluster e não tem
+# como renovar um token de `kubectl create token` (validade default de 1h). A anotação
+# abaixo faz o controller de tokens preencher `data.token` automaticamente.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prometheus-cadvisor-reader-token
+  namespace: norn-platform
+  annotations:
+    kubernetes.io/service-account.name: prometheus-cadvisor-reader
+type: kubernetes.io/service-account-token

@@ -5,8 +5,8 @@
 dotnet build
 dotnet test
 dotnet format --verify-no-changes
-docker compose -f deploy/compose/compose.infra.yaml -f deploy/compose/compose.otel.yaml up -d
-kubectl get pods -n norn-shop   # a partir da Fase 6
+deploy/bootstrap.ps1            # infra + observabilidade + cluster k3d + Shop, do zero (Fase 6)
+kubectl get pods -n norn-shop
 ```
 
 ## Arquitetura em 10 linhas
@@ -66,9 +66,11 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 Minimal API, Clean Architecture por pasta, vertical slice dentro de `Features/`, TypedResults, LoggerMessage, naming de testes `MethodName_Scenario_ExpectedBehavior`.
 
 ## Estado atual
-Fase concluída: 5. Próxima: 6.
+Fase concluída: 6. Próxima: 7.
 
-**Pendência transferida para o DoD da Fase 6:** `OOMKilled` do F1 em 4 de 5 execuções não fecha na Fase 5 — depende de `container_oom_events_total` do cAdvisor (tarefa 5a da Fase 6), mesma exceção já registrada em `docs/metrics-matrix.md`. F1/F3/F5 validados com medição real (memória, latência, kill); F2 confirmado correto por dentro (semáforo bloqueia e enfileira), calibração numérica adiada para o piloto da Fase 12.
+Cluster k3d validado de ponta a ponta: `bootstrap.ps1` leva de zero a sistema funcional em um comando, fluxo completo de pedido roda dentro do cluster, RBAC do ADR-03 confirmado (positivo e negativo), `maxReplicas=3` valida escala real, Traefik ausente (D9), `container_memory_working_set_bytes`/`container_cpu_usage_seconds_total` via cAdvisor fecham o DoD da Fase 4.
+
+**Pendência transferida para a Fase 7 (rotulador de onset):** `container_oom_events_total` não fecha — não é falha de configuração nem do cgroup v1/v2 (testado em ambos). Causa raiz: o containerd remove o cgroup do container morto antes do cAdvisor conseguir ler `oom_kill=1` nele; só sobra o cgroup do container novo, sempre zerado. `OOMKilled` em si é real e reproduzido (`reason: OOMKilled`, `exitCode: 137`, confirmado também por `memory.events` do cgroup). Decisão a tomar na Fase 7: usar `status.containerStatuses[].lastState.terminated.reason == OOMKilled` do próprio Pod (via `Norn.Monitor`) como sinal de onset do F1 em vez do caminho Prometheus. Detalhe completo em `docs/metrics-matrix.md`.
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)

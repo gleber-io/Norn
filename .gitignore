@@ -25,3 +25,7 @@ tools/analysis/__pycache__/
 # Rascunhos locais
 *.log
 ollama-serve.log
+
+# Token do ServiceAccount de scrape do cAdvisor (tarefa 5a da Fase 6) — gerado pelo
+# bootstrap.ps1 a partir do cluster k3d, nunca versionado.
+deploy/compose/cadvisor-token

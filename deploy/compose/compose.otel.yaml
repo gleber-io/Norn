@@ -23,6 +23,8 @@ services:
     volumes:
       - ./prometheus.yaml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
+      # Gerado pelo bootstrap.ps1 a partir do ServiceAccount da tarefa 5a — nunca versionado.
+      - ./cadvisor-token:/etc/prometheus/cadvisor-token:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--enable-feature=exemplar-storage"

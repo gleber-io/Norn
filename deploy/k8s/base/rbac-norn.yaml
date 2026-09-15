@@ -1,0 +1,44 @@
+# ADR-03: ServiceAccount dedicado do Norn, restrito a norn-shop, verbos mínimos.
+# A Role é derivada do catálogo fechado de ações da §5.4 — catálogo não cresce
+# sem revisar esta Role no mesmo commit (invariante do ADR-03).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: norn-executor
+  namespace: norn-shop
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: norn-executor
+  namespace: norn-shop
+rules:
+  # Leitura de topologia (Norn.Monitor, ADR-03: apenas verbos de leitura).
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # ScaleUp — patch no subrecurso scale, nunca no Deployment inteiro.
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["patch"]
+  # RestartPod — delete direto do Pod (o Deployment recria via ReplicaSet).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: norn-executor
+  namespace: norn-shop
+subjects:
+  - kind: ServiceAccount
+    name: norn-executor
+    namespace: norn-shop
+roleRef:
+  kind: Role
+  name: norn-executor
+  apiGroup: rbac.authorization.k8s.io

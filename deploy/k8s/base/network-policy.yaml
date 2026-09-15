@@ -1,0 +1,50 @@
+# Isola norn-shop (tarefa 7 da Fase 6). Infra, Collector e Ollama vivem fora do
+# cluster (ADR-10, ADR-09) — a exceção de egress para o host é explícita abaixo.
+#
+# A exceção "de ingress para o endpoint de métricas do kubelet" (tarefa 5a) não
+# aparece aqui: o scrape do cAdvisor vai do Prometheus (fora do cluster) para a
+# porta 10250 do nó, tráfego de rede de nó (host-networked), fora do que uma
+# NetworkPolicy — que só governa IP de Pod — consegue enxergar ou bloquear.
+# Fica documentado aqui para não ser confundido com um rótulo esquecido nesta policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: norn-shop-isolation
+  namespace: norn-shop
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Tráfego do LoadGenerator via NodePort (D9) e do Prometheus via scrape OTLP
+    # chegam com IP de nó (SNAT) ou de fora do cluster — não é possível restringir
+    # por podSelector sem quebrar a entrada NodePort. Runtime HTTP fica aberto;
+    # o isolamento real desta policy é o egress abaixo.
+    - {}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Pod a pod dentro do namespace (mensageria síncrona futura, admin/chaos entre réplicas).
+    - to:
+        - podSelector: {}
+    # Host: PostgreSQL, RabbitMQ, Redis, Collector OTLP — todos fora do cluster,
+    # alcançados por host.k3d.internal (tarefa 5).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 5672
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 4317

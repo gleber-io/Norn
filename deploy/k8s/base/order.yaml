@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-api
+  namespace: norn-shop
+  labels:
+    app: order-api
+spec:
+  replicas: 1 # baseline do kustomize base (tarefa 4)
+  selector:
+    matchLabels:
+      app: order-api
+  template:
+    metadata:
+      labels:
+        app: order-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 5678
+      containers:
+        - name: order-api
+          image: norn-shop-order-api:placeholder
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: shop-common-config
+            - secretRef:
+                name: shop-common-secret
+            - secretRef:
+                name: order-db-secret
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: dataprotection-keys
+              mountPath: /home/nornapp/.aspnet/DataProtection-Keys
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: dataprotection-keys
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-api
+  namespace: norn-shop
+spec:
+  selector:
+    app: order-api
+  ports:
+    - port: 80
+      targetPort: 8080
+      nodePort: 30081 # segundo ponto de entrada do Shop — o LoadGenerator fala com Catalog e Order (D9)
+  type: NodePort
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: order-api
+  namespace: norn-shop
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: order-api
