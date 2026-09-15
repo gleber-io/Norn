@@ -2,7 +2,7 @@
 
 Plataforma de self-healing baseada em MAPE-K para arquiteturas de microsserviços — Trabalho de Conclusão de Curso (AIOps / SRE).
 
-O plano de execução completo — contratos, ADRs, convenções e as 14 fases — está em [`docs/NORN-MASTER-PLAN.md`](docs/NORN-MASTER-PLAN.md). Esse documento é a fonte de verdade; este README não a duplica.
+O plano de execução completo — contratos, ADRs, convenções e as 14 fases — é mantido fora deste repositório (`NORN-MASTER-PLAN.md`, nunca commitado). Este README não o duplica; ADRs individuais ficam versionadas em [`docs/adr/`](docs/adr/).
 
 ## Requisitos da máquina
 

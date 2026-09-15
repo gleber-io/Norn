@@ -59,6 +59,7 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 - Conjunto de assinatura fechado em M ≤ 10 métricas (Fase 4) — o teste exaustivo do RuleEngine é 2^M
 - Análise estatística é Python em `tools/analysis/` (lifelines, scipy, statsmodels). Fronteira com .NET é CSV, só CSV. Nunca reimplementar o RuleEngine em Python
 - F5 tem alvo fixo (Catalog.API) e regra de término própria: âncora no kill, não no onset. `InvalidNoOnset` não se aplica a ele
+- Commits em português do Brasil, sem nenhuma referência a IA/Claude/Anthropic — nem trailer de co-autoria
 
 ## Convenções
 Minimal API, Clean Architecture por pasta, vertical slice dentro de `Features/`, TypedResults, LoggerMessage, naming de testes `MethodName_Scenario_ExpectedBehavior`.
@@ -67,7 +68,7 @@ Minimal API, Clean Architecture por pasta, vertical slice dentro de `Features/`,
 Fase concluída: 3. Próxima: 4.
 
 ## Onde encontrar
-Contratos → docs/NORN-MASTER-PLAN.md §5
+Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
 ADRs → docs/adr/
 Métricas → docs/metrics-matrix.md (nasce na Fase 4)
 Tabela de regras (golden do teste) → docs/rule-table.md (nasce na Fase 8)
