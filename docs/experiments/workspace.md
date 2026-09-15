@@ -62,4 +62,4 @@ O plano (§7.3) pinava Node 22 LTS. Em 14/09/2026, o pacote `OpenJS.NodeJS.LTS` 
 | Fase | Início | Fim | Observação |
 |---|---|---|---|
 | 00 — Preparação da máquina | 14/09/2026 | 14/09/2026 | Máquina já tinha driver NVIDIA, Docker, kubectl, k3d, Python, VS Code e Claude Code instalados; faltavam .NET 10 SDK, Node atualizado e Ollama |
-| 0 — Fundação do repositório | 14/09/2026 | | |
+| 0 — Fundação do repositório | 14/09/2026 | 14/09/2026 | |
