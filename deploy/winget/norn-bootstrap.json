@@ -1,0 +1,49 @@
+{
+    "$schema": "https://aka.ms/winget-packages.schema.2.0.json",
+    "CreationDate": "2026-09-14T22:35:58.659-00:00",
+    "Sources": [
+        {
+            "Packages": [
+                {
+                    "PackageIdentifier": "Docker.DockerDesktop",
+                    "Version": "4.43.2"
+                },
+                {
+                    "PackageIdentifier": "Git.Git",
+                    "Version": "2.36.1"
+                },
+                {
+                    "PackageIdentifier": "OpenJS.NodeJS.LTS",
+                    "Version": "24.19.0"
+                },
+                {
+                    "PackageIdentifier": "Microsoft.DotNet.SDK.10",
+                    "Version": "10.0.401"
+                },
+                {
+                    "PackageIdentifier": "Kubernetes.kubectl",
+                    "Version": "1.30.2"
+                },
+                {
+                    "PackageIdentifier": "Python.Python.3.13",
+                    "Version": "3.13.3"
+                },
+                {
+                    "PackageIdentifier": "Ollama.Ollama",
+                    "Version": "0.34.0"
+                },
+                {
+                    "PackageIdentifier": "Microsoft.VisualStudioCode",
+                    "Version": "1.137.0"
+                }
+            ],
+            "SourceDetails": {
+                "Argument": "https://cdn.winget.microsoft.com/cache",
+                "Identifier": "Microsoft.Winget.Source_8wekyb3d8bbwe",
+                "Name": "winget",
+                "Type": "Microsoft.PreIndexed.Package"
+            }
+        }
+    ],
+    "WinGetVersion": "1.29.290"
+}

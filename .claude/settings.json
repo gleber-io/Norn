@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build*)", "Bash(dotnet test*)", "Bash(dotnet format*)",
+      "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)",
+      "Bash(kubectl get*)", "Bash(kubectl describe*)", "Bash(docker ps*)"
+    ],
+    "deny": [
+      "Bash(git push*)", "Bash(docker compose down -v*)", "Bash(kubectl delete*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\git\\norn\\.claude\\hooks\\post-edit-format.ps1\""
+          }
+        ]
+      }
+    ]
+  }
+}

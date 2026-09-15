@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  dotnet-fast-gate:
+    name: Portão rápido .NET
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore (locked mode)
+        run: dotnet restore --locked-mode
+
+      - name: Verificar formatação
+        run: dotnet format --verify-no-changes
+
+      - name: Build
+        run: dotnet build --no-restore
+
+      - name: Testes unitários e de arquitetura
+        run: >
+          dotnet test --no-build
+          --filter "FullyQualifiedName!~IntegrationTests"
+          --collect:"XPlat Code Coverage"
+
+  frontend:
+    name: Front-end
+    runs-on: ubuntu-latest
+    # web/norn-dashboard só nasce na Fase 11 — sem esta guarda o CI nasce vermelho
+    # e fica assim por dez fases, treinando a ignorar o vermelho.
+    if: hashFiles('web/norn-dashboard/package-lock.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/norn-dashboard/package-lock.json
+
+      - name: Install
+        working-directory: web/norn-dashboard
+        run: npm ci
+
+      - name: Lint e formatação (Biome)
+        working-directory: web/norn-dashboard
+        run: npm run lint
+
+      - name: Testes
+        working-directory: web/norn-dashboard
+        run: npm run test
+
+      - name: Build
+        working-directory: web/norn-dashboard
+        run: npm run build
+
+  integration:
+    name: Integração (Testcontainers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore (locked mode)
+        run: dotnet restore --locked-mode
+
+      - name: Build
+        run: dotnet build --no-restore
+
+      - name: Testes de integração
+        run: >
+          dotnet test --no-build
+          --filter "FullyQualifiedName~IntegrationTests"

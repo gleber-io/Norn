@@ -1,0 +1,54 @@
+name: norn-infra
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: norn-postgres
+    environment:
+      POSTGRES_USER: norn
+      POSTGRES_PASSWORD: norn
+      POSTGRES_DB: norn
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U norn -d norn"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: norn-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: norn
+      RABBITMQ_DEFAULT_PASS: norn
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    container_name: norn-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  redis-data:
