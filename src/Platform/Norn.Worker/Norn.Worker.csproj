@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>norn-worker</UserSecretsId>
+  </PropertyGroup>
+
+  <!-- Único Microsoft.NET.Sdk.Worker de Platform/ (§4, nota) — composition root do loop.
+       Referencia todos os Platform.* (Monitor, Analyzer, Knowledge) e BuildingBlocks.Web para
+       IFeatureFlags (leitura de shop:flags:, tarefa 3) — nunca Norn.API (ADR-15). -->
+  <ItemGroup>
+    <PackageReference Include="StackExchange.Redis" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Norn.Contracts\Norn.Contracts.csproj" />
+    <ProjectReference Include="..\Norn.Knowledge\Norn.Knowledge.csproj" />
+    <ProjectReference Include="..\Norn.Monitor\Norn.Monitor.csproj" />
+    <ProjectReference Include="..\Norn.Analyzer\Norn.Analyzer.csproj" />
+    <ProjectReference Include="..\..\BuildingBlocks\Norn.BuildingBlocks.Telemetry\Norn.BuildingBlocks.Telemetry.csproj" />
+    <ProjectReference Include="..\..\BuildingBlocks\Norn.BuildingBlocks.Web\Norn.BuildingBlocks.Web.csproj" />
+  </ItemGroup>
+
+</Project>

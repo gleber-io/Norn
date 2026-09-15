@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- ADR-17: núcleo de cálculo — ML.NET detecta, sem nenhum pacote de I/O (nota da §4). O
+       Norn.Worker fornece topologia, métricas recentes, histórico, flags e cooldown já
+       resolvidos; este projeto só enxerga MetricSample e AnomalySignal. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML" />
+    <PackageReference Include="Microsoft.ML.TimeSeries" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Norn.Contracts\Norn.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

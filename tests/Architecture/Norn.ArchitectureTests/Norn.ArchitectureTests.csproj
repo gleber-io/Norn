@@ -23,6 +23,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Platform\Norn.Contracts\Norn.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\Platform\Norn.Knowledge\Norn.Knowledge.csproj" />
+    <ProjectReference Include="..\..\..\src\Platform\Norn.Monitor\Norn.Monitor.csproj" />
+    <ProjectReference Include="..\..\..\src\Platform\Norn.Analyzer\Norn.Analyzer.csproj" />
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Contracts\Norn.Shop.Contracts.csproj" />
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Catalog.API\Norn.Shop.Catalog.API.csproj" />
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Order.API\Norn.Shop.Order.API.csproj" />

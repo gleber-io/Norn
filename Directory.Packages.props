@@ -61,4 +61,35 @@
     <PackageVersion Include="Testcontainers.Redis" Version="4.15.0" />
   </ItemGroup>
 
+  <!-- Fase 7: Norn.Platform.IntegrationTests — Monitor contra Prometheus real (tarefa 10) via
+       container genérico (sem módulo Testcontainers dedicado ao Prometheus). -->
+  <ItemGroup>
+    <PackageVersion Include="Testcontainers" Version="4.15.0" />
+  </ItemGroup>
+
+  <!-- Fase 7: Norn.Knowledge — sem FrameworkReference (biblioteca pura), então o cache de
+       IPlatformConfig/ICooldownStore precisa do pacote explícito que o Shop ganha de graça
+       via Microsoft.AspNetCore.App. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.12" />
+  </ItemGroup>
+
+  <!-- Fase 7: Norn.Monitor — leitura de topologia do cluster (ADR-03, verbos de get/list/watch)
+       e o BackgroundService de polling (Microsoft.Extensions.Http.Resilience já pinado acima,
+       Fase 2). -->
+  <ItemGroup>
+    <PackageVersion Include="KubernetesClient" Version="19.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
+  </ItemGroup>
+
+  <!-- Fase 7: Norn.Analyzer — detecção de anomalia (ML.NET.TimeSeries, tarefa 4). Sem
+       FrameworkReference (biblioteca pura de cálculo, ADR-17): DI e IOptions/IConfiguration
+       chegam de pacote explícito, não de graça via ASP.NET Core. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.ML" Version="5.0.0" />
+    <PackageVersion Include="Microsoft.ML.TimeSeries" Version="5.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
+  </ItemGroup>
+
 </Project>
