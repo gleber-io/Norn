@@ -63,3 +63,4 @@ O plano (§7.3) pinava Node 22 LTS. Em 14/09/2026, o pacote `OpenJS.NodeJS.LTS` 
 |---|---|---|---|
 | 00 — Preparação da máquina | 14/09/2026 | 14/09/2026 | Máquina já tinha driver NVIDIA, Docker, kubectl, k3d, Python, VS Code e Claude Code instalados; faltavam .NET 10 SDK, Node atualizado e Ollama |
 | 0 — Fundação do repositório | 14/09/2026 | 14/09/2026 | |
+| 3 — Order.API e Payment.API | 15/09/2026 | 15/09/2026 | Bus outbox do MassTransit intercepta qualquer `IPublishEndpoint` resolvido de escopo — testes de integração que simulam evento de outro serviço devem publicar via `IBus`, não `IPublishEndpoint` de escopo, senão a mensagem fica retida sem `SaveChangesAsync` correspondente |

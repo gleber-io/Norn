@@ -25,10 +25,15 @@ jobs:
         run: dotnet build --no-restore
 
       - name: Testes unitários e de arquitetura
+        # --ignore-exit-code 8: sob MTP (ADR-11), um assembly de teste cujo filtro não casa
+        # nenhum teste sai com código 8 ("zero testes"), e isso derrubaria o portão mesmo com os
+        # 80+ testes reais verdes — o filtro divide unitários de integração por FullyQualifiedName,
+        # então os assemblies *.IntegrationTests sempre ficam vazios aqui, de propósito.
         run: >
           dotnet test --no-build
           --filter "FullyQualifiedName!~IntegrationTests"
-          --collect:"XPlat Code Coverage"
+          --coverage
+          --ignore-exit-code 8
 
   frontend:
     name: Front-end
@@ -78,6 +83,9 @@ jobs:
         run: dotnet build --no-restore
 
       - name: Testes de integração
+        # --ignore-exit-code 8: mesmo motivo do portão rápido, invertido — os assemblies
+        # *.UnitTests e Architecture ficam vazios aqui, de propósito.
         run: >
           dotnet test --no-build
           --filter "FullyQualifiedName~IntegrationTests"
+          --ignore-exit-code 8

@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/TestResults/
+**/*.coverage
+**/*.diag
+.git/
+.vs/
+web/norn-dashboard/node_modules/
+web/norn-dashboard/dist/
+docs/

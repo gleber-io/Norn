@@ -64,7 +64,7 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 Minimal API, Clean Architecture por pasta, vertical slice dentro de `Features/`, TypedResults, LoggerMessage, naming de testes `MethodName_Scenario_ExpectedBehavior`.
 
 ## Estado atual
-Fase concluída: 0. Próxima: 1.
+Fase concluída: 3. Próxima: 4.
 
 ## Onde encontrar
 Contratos → docs/NORN-MASTER-PLAN.md §5

@@ -4,6 +4,9 @@ obj/
 *.user
 *.suo
 .vs/
+TestResults/
+*.coverage
+*.diag
 
 # Node / front-end
 node_modules/
