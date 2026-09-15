@@ -826,6 +826,12 @@
           "xunit.v3.runner.common": "[4.0.1]"
         }
       },
+      "norn.buildingblocks.chaos": {
+        "type": "Project",
+        "dependencies": {
+          "StackExchange.Redis": "[3.2.1, )"
+        }
+      },
       "norn.buildingblocks.messaging": {
         "type": "Project",
         "dependencies": {
@@ -857,6 +863,7 @@
         "dependencies": {
           "FluentValidation": "[12.1.1, )",
           "Microsoft.Extensions.Http.Resilience": "[10.10.0, )",
+          "Norn.BuildingBlocks.Chaos": "[1.0.0, )",
           "Norn.BuildingBlocks.Messaging": "[1.0.0, )",
           "Norn.BuildingBlocks.Telemetry": "[1.0.0, )",
           "Norn.BuildingBlocks.Web": "[1.0.0, )",

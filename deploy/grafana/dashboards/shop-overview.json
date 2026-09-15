@@ -90,6 +90,21 @@
           "legendFormat": "{{queue}}"
         }
       ]
+    },
+    {
+      "id": 6,
+      "title": "norn_chaos_active — intensidade do cenário injetado (ADR-13, Fase 5)",
+      "type": "timeseries",
+      "description": "Valor da série é a própria intensidade [0,1]; ausência de dado = nenhum cenário ativo mirando o serviço. É o sinal que o rotulador usa para marcar o onset.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "norn_chaos_active{exported_job=~\"$service\"}",
+          "legendFormat": "{{exported_job}} · {{scenario}}"
+        }
+      ]
     }
   ]
 }

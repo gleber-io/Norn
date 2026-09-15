@@ -1,5 +1,6 @@
 using FluentValidation;
 using Microsoft.EntityFrameworkCore;
+using Norn.BuildingBlocks.Chaos;
 using Norn.BuildingBlocks.Messaging;
 using Norn.BuildingBlocks.Telemetry;
 using Norn.BuildingBlocks.Web.Errors;
@@ -7,6 +8,7 @@ using Norn.BuildingBlocks.Web.FeatureFlags;
 using Norn.BuildingBlocks.Web.HealthChecks;
 using Norn.BuildingBlocks.Web.Routing;
 using Norn.Shop.Payment.API.Application.Ports;
+using Norn.Shop.Payment.API.Features.AdminChaos;
 using Norn.Shop.Payment.API.Features.AuthorizeOrderPayment;
 using Norn.Shop.Payment.API.Features.ProcessPayment;
 using Norn.Shop.Payment.API.Infrastructure;
@@ -30,10 +32,13 @@ builder.Services.AddOptions<PaymentGatewayOptions>()
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddSingleton<IPaymentGateway, SimulatedPaymentGateway>();
 builder.Services.AddScoped<IValidator<ProcessPaymentRequest>, ProcessPaymentValidator>();
+builder.Services.AddScoped<IValidator<AdminChaosActivateRequest>, AdminChaosActivateValidator>();
 builder.Services.AddSingleton<IPaymentMetrics, PaymentMetrics>();
 
 var redisConnectionString = builder.Configuration["Redis:ConnectionString"] ?? "localhost:6379";
-builder.Services.AddNornFeatureFlags(await ConnectionMultiplexer.ConnectAsync(redisConnectionString));
+var redisConnectionMultiplexer = await ConnectionMultiplexer.ConnectAsync(redisConnectionString);
+builder.Services.AddNornFeatureFlags(redisConnectionMultiplexer);
+builder.Services.AddNornChaos(redisConnectionMultiplexer, builder.Configuration, "Norn.Shop.Payment.API");
 
 builder.Services.AddNornProblemDetails();
 builder.Services.AddNornHealthChecks()
@@ -53,9 +58,15 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.UseExceptionHandler();
+app.UseNornChaos();
 
 var payments = app.MapApiVersion(1);
 payments.MapProcessPayment();
+
+if (!app.Environment.IsProduction())
+{
+    app.MapAdminChaos();
+}
 
 app.MapNornHealthChecks();
 

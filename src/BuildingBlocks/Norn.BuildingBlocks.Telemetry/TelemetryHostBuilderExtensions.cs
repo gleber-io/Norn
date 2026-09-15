@@ -52,6 +52,8 @@ public static class TelemetryHostBuilderExtensions
                 .AddMeter(serviceName)
                 // norn_app_errors_total (ADR-10, tarefa 5a da Fase 4) — compartilhado por toda API do Shop.
                 .AddMeter("Norn.BuildingBlocks.Web")
+                // norn_chaos_active (ADR-13, Fase 5) — idem, compartilhado pelas três APIs do Shop.
+                .AddMeter("Norn.BuildingBlocks.Chaos")
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .SetExemplarFilter(ExemplarFilterType.TraceBased)

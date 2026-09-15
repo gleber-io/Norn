@@ -38,6 +38,7 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 - `SelfSubjectAccessReview` leva o subrecurso em `Subresource`, nunca `Resource = "deployments/scale"`
 - Front: React Router **v8** declarative (`<BrowserRouter>`), import de `react-router`. Sem `react-router-dom`, sem `createBrowserRouter`. Tailwind v4 CSS-first por `@tailwindcss/vite`, sem `tailwind.config.js`
 - Caos é middleware próprio (ADR-13). Sem Simmy, sem `Chaos*` do Polly. Platform nunca referencia BuildingBlocks.Chaos
+- Gerador de carga é console próprio (ADR-18). Sem NBomber — v5+ do pacote NuGet é licença comercial (Business License), incompatível com uso de TCC
 - Severidade = distância do SLO, bandas via IOptions (ADR-14). Primário é ordem de leitura; prompt leva todos os sinais; regra indexa o conjunto
 - SDK pinado em 10.0.401, `rollForward: latestPatch`
 - Eventos do dashboard vão por Redis pub/sub, canal `norn:events` (ADR-15). Nunca por RabbitMQ — o F2 degrada o broker de propósito. Worker nunca referencia Norn.API
@@ -65,7 +66,9 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 Minimal API, Clean Architecture por pasta, vertical slice dentro de `Features/`, TypedResults, LoggerMessage, naming de testes `MethodName_Scenario_ExpectedBehavior`.
 
 ## Estado atual
-Fase concluída: 4. Próxima: 5.
+Fase concluída: 5. Próxima: 6.
+
+**Pendência transferida para o DoD da Fase 6:** `OOMKilled` do F1 em 4 de 5 execuções não fecha na Fase 5 — depende de `container_oom_events_total` do cAdvisor (tarefa 5a da Fase 6), mesma exceção já registrada em `docs/metrics-matrix.md`. F1/F3/F5 validados com medição real (memória, latência, kill); F2 confirmado correto por dentro (semáforo bloqueia e enfileira), calibração numérica adiada para o piloto da Fase 12.
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)

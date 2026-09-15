@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Norn.LoadGenerator</RootNamespace>
+  </PropertyGroup>
+
+  <!-- ADR-18: nenhum PackageReference — nem NBomber (licença comercial a partir da v5), nem
+       Microsoft.Extensions.*, para não precisar de nenhuma entrada em Directory.Packages.props.
+       HttpClient e System.Text.Json já vêm no runtime. Fala HTTP com o Shop, nenhuma referência
+       de projeto (§4). -->
+
+</Project>
