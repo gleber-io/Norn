@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- ADR-11 (revisado 14/09/2026): xunit.v3 sobre Microsoft.Testing.Platform — o SDK 10.0.401
+         não suporta mais a ponte VSTest para net10.0. Sob MTP, o projeto de teste é o executável. -->
+    <OutputType>Exe</OutputType>
+    <!-- Sem esta linha, `dotnet test` cai de volta no modo VSTest e reporta "0 testes" em silêncio,
+         mesmo com o executável funcionando (xunit/xunit#3343). -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NetArchTest.Rules" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Platform\Norn.Contracts\Norn.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Contracts\Norn.Shop.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Catalog.API\Norn.Shop.Catalog.API.csproj" />
+    <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Order.API\Norn.Shop.Order.API.csproj" />
+    <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Payment.API\Norn.Shop.Payment.API.csproj" />
+  </ItemGroup>
+
+</Project>
