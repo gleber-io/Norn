@@ -27,8 +27,14 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+      - "15692:15692"   # rabbitmq_prometheus — rabbitmq_queue_messages_ready (tarefa 5 da Fase 4)
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      # Ativa rabbitmq_prometheus além do management — plugin nativo, sem exporter de terceiros.
+      - ./rabbitmq-enabled-plugins:/etc/rabbitmq/enabled_plugins:ro
+      # Sem isto, rabbitmq_queue_messages_ready sai agregado no cluster, sem rótulo `queue` —
+      # a granularidade que a matriz da Fase 4 exige para atribuir profundidade de fila ao alvo do F2.
+      - ./rabbitmq-prometheus.conf:/etc/rabbitmq/conf.d/10-prometheus.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 10s

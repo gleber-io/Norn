@@ -26,6 +26,11 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--enable-feature=exemplar-storage"
+      # Tarefa 8 da Fase 4: retenção cobre semanas de desenvolvimento até a campanha (Fase 12);
+      # o teto de tamanho é o que protege o disco quando o tempo não basta como limite —
+      # orçamento de 3-6 GB para Prometheus + Tempo juntos (Fase 00, ADR-09).
+      - "--storage.tsdb.retention.time=15d"
+      - "--storage.tsdb.retention.size=3GB"
     ports:
       - "9090:9090"
     healthcheck:
@@ -53,6 +58,7 @@ services:
       GF_FEATURE_TOGGLES_ENABLE: "traceToMetrics"
     volumes:
       - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
       - "3000:3000"

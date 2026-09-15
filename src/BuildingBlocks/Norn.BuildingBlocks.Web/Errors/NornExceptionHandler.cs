@@ -11,6 +11,7 @@ internal sealed partial class NornExceptionHandler(ILogger<NornExceptionHandler>
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
         LogUnhandledException(logger, exception);
+        AppErrorMetrics.RecordException(exception);
 
         var problemDetails = new ProblemDetails
         {

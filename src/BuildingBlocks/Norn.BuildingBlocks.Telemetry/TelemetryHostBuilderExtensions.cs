@@ -50,6 +50,8 @@ public static class TelemetryHostBuilderExtensions
                 .AddMeter("System.Runtime")
                 // Convenção: o Meter de métricas de negócio do serviço leva o mesmo nome do serviço.
                 .AddMeter(serviceName)
+                // norn_app_errors_total (ADR-10, tarefa 5a da Fase 4) — compartilhado por toda API do Shop.
+                .AddMeter("Norn.BuildingBlocks.Web")
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .SetExemplarFilter(ExemplarFilterType.TraceBased)

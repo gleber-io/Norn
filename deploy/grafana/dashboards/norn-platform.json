@@ -1,0 +1,94 @@
+{
+  "uid": "norn-platform",
+  "title": "Norn Platform",
+  "tags": ["norn", "platform", "mape-k"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "RSS — Catalog.API (dotnet.process.memory.working_set) · F1",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "dotnet_process_memory_working_set_bytes{exported_job=\"Norn.Shop.Catalog.API\"}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "Tempo de GC — Catalog.API (dotnet.gc.pause.time) · F1",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rate(dotnet_gc_pause_time_seconds_total{exported_job=\"Norn.Shop.Catalog.API\"}[1m])" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Latência externa do gateway — Payment.API (norn_shop_payments_gateway_latency_ms) · F3",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(norn_shop_payments_gateway_latency_ms_bucket[1m])))" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "Profundidade de fila — Order/Payment (rabbitmq_queue_messages_ready) · F2",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "rabbitmq_queue_messages_ready" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Overhead do Norn — container_memory / container_cpu (cAdvisor)",
+      "type": "text",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 16 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Placeholder — nasce na Fase 6.** Fonte é o cAdvisor do kubelet (tarefa 5a), não OTLP. Sem cluster, `container_memory_working_set_bytes`, `container_cpu_usage_seconds_total` e `container_oom_events_total` não retornam série."
+      }
+    },
+    {
+      "id": 6,
+      "title": "Latência do loop MAPE-K (detecção → correlação → decisão → atuação)",
+      "type": "text",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 16 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Placeholder — nasce nas Fases 7 a 9.** Fonte é timestamp persistido no Knowledge (`AnomalySignal`, `AnomalyContext`, `HealingPlan`, `HealingOutcome`), não Prometheus — decomposição em §3. Sem `Norn.Monitor`/`Norn.Analyzer`/`Norn.Planner`/`Norn.Executor`, nenhuma série existe ainda."
+      }
+    },
+    {
+      "id": 7,
+      "title": "HealingOutcome — ações aplicadas / rejeitadas / NoOp",
+      "type": "text",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 22 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Placeholder — nasce na Fase 9.** Catálogo fechado de ações (§5.4): `ScaleUp`, `RestartPod`, `ToggleFeatureFlag`, `NoOp`. Sem `Norn.Executor`, sem `HealingOutcome`."
+      }
+    },
+    {
+      "id": 8,
+      "title": "Taxa de fallback do Planner (LLM → RuleEngine)",
+      "type": "text",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 22 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Placeholder — nasce na Fase 8.** Decomposta por motivo (timeout, JSON inválido, ação fora do catálogo, pré-condição violada, orçamento de prompt estourado) — §3."
+      }
+    }
+  ]
+}

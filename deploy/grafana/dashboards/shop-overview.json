@@ -1,0 +1,95 @@
+{
+  "uid": "norn-shop-overview",
+  "title": "Shop Overview",
+  "tags": ["norn", "shop", "red"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(http_server_request_duration_seconds_count, exported_job)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Rate (req/s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (exported_job) (rate(http_server_request_duration_seconds_count{exported_job=~\"$service\"}[1m]))",
+          "legendFormat": "{{exported_job}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Errors (taxa de 5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (exported_job) (rate(http_server_request_duration_seconds_count{exported_job=~\"$service\", http_response_status_code=~\"5..\"}[1m]))",
+          "legendFormat": "{{exported_job}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "Duration — p99 (s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, exported_job) (rate(http_server_request_duration_seconds_bucket{exported_job=~\"$service\"}[1m])))",
+          "legendFormat": "{{exported_job}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "norn_app_errors_total (errorsByType) — exemplar clicável",
+      "type": "timeseries",
+      "description": "Consulta sobre a série crua (sem sum/rate) — agregação descarta exemplars em tempo de query (§7.5, Fase 4 tarefa 3).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "norn_app_errors_total{exported_job=~\"$service\"}",
+          "legendFormat": "{{exported_job}} · {{exception_type}}",
+          "exemplar": true
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "RabbitMQ — profundidade de fila (rabbitmq_queue_messages_ready)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "rabbitmq_queue_messages_ready",
+          "legendFormat": "{{queue}}"
+        }
+      ]
+    }
+  ]
+}
