@@ -72,8 +72,11 @@ vivo — não fechada pelo padrão rigoroso de DoD integral.** F2 e F3 fecharam 
 dispara de verdade com UID correto mas fica `PartiallyApplied` (janela de verificação curta
 demais); `DryRun` e o circuit breaker não foram exercitados em replay ao vivo completo (só teste
 unitário). Tarefa 8 (manifestos K8s) feita, não ligada ao `bootstrap.ps1`. Detalhe completo abaixo.
-Decisão tomada: avançar para a Fase 10 em vez de fechar os residuais de F1/DryRun/breaker — ver
-detalhe da Fase 10 abaixo.
+Decisão tomada: avançar para a Fase 10 em vez de fechar os residuais de F1/DryRun/breaker.
+**Fase 10 (Norn.API) concluída e fechada — DoD integral validado ao vivo, ver detalhe abaixo.**
+Residuais da Fase 9 (F1 `PartiallyApplied`, `DryRun`/breaker só com teste unitário) continuam em
+aberto, não bloqueiam a Fase 11. Próxima decisão: avançar para a Fase 11 (Dashboard React) ou
+fechar os residuais da Fase 9 primeiro.
 
 Cluster k3d validado de ponta a ponta (Fase 6): `bootstrap.ps1` leva de zero a sistema funcional em um comando, fluxo completo de pedido roda dentro do cluster, RBAC do ADR-03 confirmado (positivo e negativo), `maxReplicas=3` valida escala real, Traefik ausente (D9), `container_memory_working_set_bytes`/`container_cpu_usage_seconds_total` via cAdvisor fecham o DoD da Fase 4.
 
@@ -393,8 +396,9 @@ SHA de commit — a próxima `bootstrap.ps1` sobrescreve), réplicas de volta ao
 cluster ao vivo** (via `kubectl patch`) — `deploy/k8s/base/catalog.yaml` também foi atualizado, então
 uma reaplicação futura do manifesto (`bootstrap.ps1` ou `kubectl apply -k`) mantém 384Mi.
 
-**Fase 10 — Norn.API (BFF + SignalR), implementada e testada; replay ao vivo com o Worker rodando
-junto ainda não feito.** `Norn.API` criado do zero (era só uma pasta com `.gitkeep`): sete
+**Fase 10 — Norn.API (BFF + SignalR), concluída: implementada, testada e validada ao vivo de ponta
+a ponta (Worker + API como processos separados, DoD integral fechado).** `Norn.API` criado do zero
+(era só uma pasta com `.gitkeep`): sete
 endpoints REST (`GET /api/v1/topology|signals|plans|outcomes|mode`, `PUT /api/v1/mode`,
 `GET /api/v1/experiments/{runId}`) no padrão Minimal API do Shop (`TypedResults`, validação por
 endpoint filter, `MapApiVersion`); `NornHub : Hub<INornHubClient>` com os seis métodos
@@ -433,10 +437,11 @@ no repositório e primeiro uso de `Microsoft.AspNetCore.SignalR.Client` — cobr
 ao pé da letra (publica os seis `eventType` direto no Redis via Testcontainers, **sem subir o
 Worker**, e afirma que cada um chega a um `HubConnection` real via long polling contra o
 `TestServer`), o envelope malformado seguido de um válido (o assinante sobrevive e o válido chega),
-os cinco GETs contra Postgres real e o health check com as duas dependências reais no ar. Um
-`[Fact]` novo em `Norn.ArchitectureTests` (22 no total, antes 21) fecha a proibição
-Worker→API que o comentário da classe já anunciava desde a Fase 9. `dotnet build` e
-`dotnet format --verify-no-changes` limpos.
+os cinco GETs contra Postgres real e o health check com as duas dependências reais no ar. Dois
+`[Fact]` novos em `Norn.ArchitectureTests` (23 no total, antes 21) — um fecha a proibição
+Worker→API que o comentário da classe já anunciava desde a Fase 9, outro (achado da revisão de
+código antes do commit) fecha a ausência simétrica: API nunca referencia Monitor/Analyzer/
+Planner/Executor/Worker. `dotnet build` e `dotnet format --verify-no-changes` limpos.
 
 **Smoke test ao vivo contra a infra real** (`norn-postgres`/`norn-redis` já de pé de uma sessão
 anterior, sem subir o Worker): `dotnet run --project src/Platform/Norn.API` conectou, migrou (sem
@@ -452,14 +457,35 @@ depois — mesma prova do teste automatizado, mas contra o processo real. Proces
 final; `mode` nunca foi alterado (permaneceu `Observe`); o smoke test não persistiu nada no
 `norn-postgres` real além das leituras.
 
-**Não validado ainda — fica para uma sessão de replay ao vivo, seguindo a prática das Fases 7-9**:
-Worker e API rodando ao mesmo tempo como processos separados com uma anomalia real disparando os
-seis eventos em sequência até um cliente SignalR (a "janela < 500ms" do DoD depende de medir isso
-ao vivo, não só via Testcontainers); `PUT /api/v1/mode` mudando o comportamento do Worker em
-runtime sem restart (só a ausência de publish foi provada, não a propagação real de modo);
-derrubar o container Redis com a API no ar e confirmar `/health/ready` virar unhealthy
-especificamente pelo check `norn-events-subscriber` (só o caminho saudável foi testado, ao vivo e
-via Testcontainers).
+**Replay ao vivo com Worker e API juntos — concluído em sessão de acompanhamento, DoD da Fase 10
+fechado de ponta a ponta.** `Norn.Worker` e `Norn.API` rodados como processos `dotnet run`
+separados contra a infra real (`norn-postgres`/`norn-redis`/Prometheus/o cluster k3d de pé, Ollama
+nativo), com um cliente SignalR real (console scratch, `Microsoft.AspNetCore.SignalR.Client`)
+conectado a `/hubs/norn`:
+
+- **`PUT /api/v1/mode` mudou o Worker de `Observe` para `Active` em runtime, sem restart** — e o
+  `ModeChanged` chegou ao cliente ~8s depois (dentro da janela de ≤5s de detecção por diff somada à
+  latência de rede, o tradeoff já aceito na decisão de design).
+- **F1 disparou a cadeia completa dos seis eventos, todos chegando ao cliente em tempo real**:
+  `SignalDetected` (múltiplos, RSS subindo) → `TopologyUpdated` (após a janela de correlação fechar
+  com 17 sinais) → `PlanCreated` (`ScaleUp`, decidido pelo LLM) → `ActionApplied`/`OutcomeVerified`
+  (o mesmo `HealingOutcome`, `Status: Succeeded`, `SloRestored: true`, `timeToRecoverySeconds:
+  120.11`) — cada evento apareceu no cliente no mesmo segundo do log correspondente do Worker,
+  bem dentro do limite de 500ms do DoD (a latência ponta a ponta que importa é a do Executor/janela
+  de verificação, não a do relay). Réplica do Catalog foi de 1 para 2 de verdade
+  (`kubectl get pods` confirmou o segundo pod). Um segundo ciclo, já com o caos desativado, disparou
+  um `NoOp` e fechou a mesma cadeia de eventos, confirmando que o pipeline não é um evento isolado.
+- **Derrubar o container `norn-redis` com a API no ar fez `/health/ready` virar `503` de verdade**,
+  e o log confirmou a causa exata: `PlatformEventRelay` capturou `RedisConnectionException`
+  (`SocketClosed`), `NornEventRelayHealthCheck` reportou `norn-events-subscriber` unhealthy com a
+  mensagem "Conexão Redis indisponível" — exatamente a falha silenciosa que o DoD pede para cobrir,
+  não uma falha genérica. Religar o Redis recuperou `/health/ready` para `200` sozinho, sem restart
+  da API (confirma `ConnectionRestored` funcionando). Os pods do Shop toleraram a queda breve
+  (~5s) sem entrar em `CrashLoopBackOff` desta vez.
+
+Ambiente revertido ao final: modo `Observe`, réplica do Catalog de volta a 1, caos F1 desativado,
+Worker/API/cliente SignalR locais encerrados, Redis e Postgres seguem de pé (reaproveitados de uma
+sessão anterior, não foram provisionados nesta).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
