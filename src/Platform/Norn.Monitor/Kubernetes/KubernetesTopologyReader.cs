@@ -1,4 +1,5 @@
 using k8s;
+using Microsoft.Extensions.Options;
 using Norn.Contracts;
 using Norn.Contracts.Ports;
 
@@ -9,11 +10,12 @@ namespace Norn.Monitor.Kubernetes;
 /// escrita — os verbos de escrita são do Norn.Executor). Fonte do <c>TopologyUpdated</c> do
 /// NornHub (§5.6, Fase 10).
 /// </summary>
-internal sealed class KubernetesTopologyReader(IKubernetes kubernetesClient) : ITopologyReader
+internal sealed class KubernetesTopologyReader(IKubernetes kubernetesClient, IOptions<MonitorOptions> options) : ITopologyReader
 {
     public async Task<TopologyInfo> GetTopologyAsync(string service, string namespaceName, CancellationToken cancellationToken)
     {
-        var deployment = await kubernetesClient.AppsV1.ReadNamespacedDeploymentAsync(service, namespaceName, cancellationToken: cancellationToken);
+        var deploymentName = options.Value.ServiceToDeploymentName.GetValueOrDefault(service, service);
+        var deployment = await kubernetesClient.AppsV1.ReadNamespacedDeploymentAsync(deploymentName, namespaceName, cancellationToken: cancellationToken);
 
         var container = deployment.Spec.Template.Spec.Containers.FirstOrDefault();
         var requests = container?.Resources?.Requests;

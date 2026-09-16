@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Norn.Contracts;
 using Norn.Contracts.Ports;
 using Norn.Monitor.Prometheus;
 
@@ -38,7 +39,11 @@ internal sealed partial class MonitorPollingBackgroundService(
                 var sample = await metricSource.QueryInstantAsync(query.PromQl, cancellationToken);
                 if (sample is not null)
                 {
-                    buffer.Append(sample);
+                    // O nome lógico vem do catálogo, não do rótulo __name__ da resposta: expressões
+                    // agregadas (histogram_quantile, sum, divisão) removem __name__ por definição do
+                    // PromQL — usar a resposta aqui geraria MetricName vazio para p99, taxa de 5xx e
+                    // errorsByType, e o SeverityCalculator não teria banda configurada para "".
+                    buffer.Append(sample with { MetricName = query.MetricName });
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

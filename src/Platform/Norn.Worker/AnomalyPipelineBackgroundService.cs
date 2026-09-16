@@ -45,7 +45,16 @@ internal sealed partial class AnomalyPipelineBackgroundService(
 
         do
         {
-            await PumpAsync(stoppingToken);
+            try
+            {
+                await PumpAsync(stoppingToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Uma falha transitória (K8s, Prometheus, Postgres) não pode derrubar o processo
+                // que sustenta a campanha inteira — ela é registrada e o laço continua no próximo tick.
+                LogPumpCycleFailed(logger, ex);
+            }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }
@@ -110,6 +119,9 @@ internal sealed partial class AnomalyPipelineBackgroundService(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Sinal detectado: {MetricName} em {Service}, severidade {Severity} (modo {Mode}).")]
     private static partial void LogSignalDetected(ILogger logger, string metricName, string service, Severity severity, PlatformMode mode);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Ciclo do pipeline falhou — mantendo o laço vivo para o próximo tick.")]
+    private static partial void LogPumpCycleFailed(ILogger logger, Exception exception);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "AnomalyContext {ContextId} persistido para {Service} — primário {PrimaryMetric}, {SignalCount} sinal(is) na janela.")]
     private static partial void LogContextPersisted(ILogger logger, Guid contextId, string service, string primaryMetric, int signalCount);
