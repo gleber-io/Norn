@@ -66,7 +66,7 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 Minimal API, Clean Architecture por pasta, vertical slice dentro de `Features/`, TypedResults, LoggerMessage, naming de testes `MethodName_Scenario_ExpectedBehavior`.
 
 ## Estado atual
-Fase concluída: 7. Próxima: 8.
+Fase concluída: 8. Próxima: 9.
 
 Cluster k3d validado de ponta a ponta (Fase 6): `bootstrap.ps1` leva de zero a sistema funcional em um comando, fluxo completo de pedido roda dentro do cluster, RBAC do ADR-03 confirmado (positivo e negativo), `maxReplicas=3` valida escala real, Traefik ausente (D9), `container_memory_working_set_bytes`/`container_cpu_usage_seconds_total` via cAdvisor fecham o DoD da Fase 4.
 
@@ -83,6 +83,79 @@ Cluster k3d validado de ponta a ponta (Fase 6): `bootstrap.ps1` leva de zero a s
 Também virou definitivo: `AnomalyPipelineBackgroundService.ExecuteAsync` agora captura exceção por ciclo em vez de deixar o `BackgroundServiceExceptionBehavior.StopHost` padrão derrubar o processo inteiro numa falha transitória — foi essa mudança que permitiu ver o segundo bug sem perder a sessão de teste.
 
 **Achado à parte, não bloqueante:** o pod do Catalog.API tomou `OOMKilled` real algumas vezes mesmo com o F1 desativado e sem tráfego algum contra o serviço, sugerindo que o limite de 256Mi do manifesto (Fase 6) está apertado para a operação normal após várias horas de cluster ligado. Vale revisar antes da campanha (Fase 12).
+
+**Fase 8 — Planner, concluída (tarefas 1–11; 11a opcional não iniciada).** `Norn.Planner` criado:
+`RuleEngine` (braço C — `DecideActionType` puro e total sobre a assinatura fechada M=7, prioridade
+F1 > F2 > F3 > NoOp documentada em `docs/rule-table.md`), `HealingActionPreconditionChecker`
+(barreiras do ADR-04 + pré-condições do §5.4, compartilhado entre os dois braços), `LlmPlanner`
+(pipeline completo do §5.5 — orçamento por caracteres, `IChatClient` direto via OllamaSharp sobre
+`norn-qwen`, validação/reparo/fallback, `DecidedBy` de três vias Llm/RuleEngine/Fallback) e
+`LlmOutputValidator`. `Norn.Contracts` ganhou `ShopFlagCatalog` (extraído da duplicação local do
+Worker) e `HealingActionCatalog` (fonte única do catálogo de ações para o prompt e a validação).
+178 testes verdes em `Norn.Planner.UnitTests` (exaustivo 9a sobre 2⁷=128 subconjuntos, fronteiras de
+severidade 9b, pré-condições 9c, validador com dublê de `IChatClient` — nenhum chamando o Ollama
+real), mais `Norn.ArchitectureTests` cobrindo o Planner pela regra de dependência do ADR-17.
+Decisão registrada: `Microsoft.SemanticKernel`/`Connectors.Ollama` (alpha) ficou de fora —
+`OllamaApiClient` (OllamaSharp) já implementa `IChatClient` diretamente, dispensando o conector
+para fixar `seed`/`num_ctx` (mesma conclusão que o `CLAUDE.md` já registrava).
+
+**Verificação manual contra o `norn-qwen` real (fora da suíte de teste) confirmou o pipeline
+ponta a ponta**: chamada real ao Ollama, JSON com `replicaDelta` como número puro (não string)
+inicialmente caiu em `InvalidJson` nos dois braços — bug real de tipagem em
+`LlmActionDto.Parameters` (esperava `string`, o modelo manda número/bool também), corrigido para
+`Dictionary<string, JsonElement>` com normalização por `JsonValueKind` em `LlmOutputValidator`.
+Depois da correção, `DecidedBy: Llm` em ~3,2s, plano válido, `PromptHash` calculado. Nenhum dos dois
+bugs (este e os da Fase 7) apareceria só com testes unitários — reforça o valor de sempre validar
+contra o Ollama real antes de gastar as 20 execuções da tarefa 11.
+
+**Tarefa 11 concluída — Fase 8 fechada.** Réplay ao vivo do F3 (sessão de acompanhamento, após a
+máquina precisar ser desligada e religada no meio do trabalho — ver "recuperação de ambiente"
+abaixo) capturou um `AnomalyContext` real (`Norn.Shop.Payment.API`,
+`norn_shop_payments_gateway_latency_ms`, severidade `Critical`, ~4770ms contra SLO de 500ms),
+exportado como fixture versionada (`tests/Platform/Norn.Planner.UnitTests/Fixtures/f3-gateway-latency-context.json`)
+com `context_hash` afirmado em teste. 20 execuções do `LlmPlanner` real contra o `norn-qwen` sobre
+esse contexto: **estabilidade de 20/20 nos três níveis** (ação, parâmetros, rationale byte-a-byte),
+`decidedBy: Llm` sempre, nenhuma queda para regra/fallback. Achado que importa para H2: o LLM
+escolhe `NoOp` nas 20, o `RuleEngine` escolhe `ToggleFeatureFlag` para a mesma assinatura — os dois
+braços divergem de forma estável, e o rationale (idêntico nas 20) revela a causa: o modelo trata a
+ausência de `pod`/`podUid` no contexto como impeditivo, mesmo `ToggleFeatureFlag` não dependendo de
+pod algum. Detalhe completo, incluindo a nota sobre o ambiente híbrido da captura, em
+`docs/experiments/estabilidade-llm.md`. Tarefa 11a (sensibilidade ao *thinking mode*) continua
+opcional, não iniciada.
+
+**Dois bugs reais adicionais, encontrados só ao tentar fechar o loop do F3 ao vivo** (nenhum
+aparecia nos 180 testes unitários do Planner nem nos testes de Fase 7):
+1. **F3 não alcançava a métrica que deveria mover.** O delay do caos (`GatewayLatencyEffect`) vivia
+   só no `ChaosMiddleware` (pipeline HTTP) — mas o tráfego real de pagamento é 100% assíncrono
+   (`Order.API` → RabbitMQ → `OrderCreatedConsumer`), que nunca passa por lá; e mesmo forçando uma
+   chamada HTTP direta, o delay acontecia fora da janela que `ProcessPaymentHandler` cronometra em
+   `norn_shop_payments_gateway_latency_ms` (só a chamada a `SimulatedPaymentGateway.AuthorizeAsync`
+   é medida). Corrigido movendo o delay para dentro do próprio `SimulatedPaymentGateway`, via um
+   seam público novo (`Norn.BuildingBlocks.Chaos.IChaosGatewayDelay`) que a mesma instância de
+   `GatewayLatencyEffect` implementa — `ChaosServiceCollectionExtensions` agora registra essa classe
+   uma vez, exposta sob os dois contratos, para o `ChaosBackgroundService` atualizar e o gateway
+   simulado ler a mesma instância. `OnRequestAsync` do F3 virou passagem pura (só `ConcurrencyThrottleEffect`
+   do F2 ainda usa o meio HTTP de verdade).
+2. **`MonitorPollingBackgroundService` gravava `Target.Service = "unknown"`** para as quatro
+   métricas agregadas da assinatura (p99, taxa de 5xx, `errorsByType`, latência do gateway) — o
+   mesmo padrão do bug de `MetricName` vazio já corrigido na Fase 7, só que para o rótulo
+   `exported_job`: `sum by (le)`/`sum(...)/sum(...)` também removem esse rótulo, e
+   `PrometheusMetricSource.ToServiceTarget` cai no default "unknown", que quebra a leitura de
+   topologia (`Deployment "unknown"` 404) e aborta a persistência do contexto. Corrigido no mesmo
+   ponto que já sobrescrevia `MetricName` a partir do catálogo — agora também sobrescreve
+   `Target.Service`.
+
+**Recuperação de ambiente (não é bug do projeto, registrar para a próxima sessão que reiniciar a
+máquina):** depois de desligar/religar o Windows, `host.docker.internal` no arquivo `hosts` do
+Windows ficou apontando para o IP antigo da máquina (o DHCP deu outro IP no boot), e reiniciar o
+Docker Desktop **não** corrigiu isso sozinho nas duas tentativas. O sintoma é `kubectl` (rodando no
+Windows, fora de container) falhar com timeout de conexão. Contorno sem mexer em arquivo de
+sistema: editar `~/.kube/config` trocando `host.docker.internal:<porta>` por `127.0.0.1:<porta>` — a
+porta do `k3d-norn-serverlb` já é publicada em `0.0.0.0`, então `127.0.0.1` funciona independente do
+IP da LAN. Os pods do Shop também precisam de um ciclo de `CrashLoopBackOff` para se recuperarem
+depois que a infra volta (Postgres/Redis não estavam de pé quando eles tentaram subir pela primeira
+vez) — não há permissão configurada para `kubectl delete pod`, então é esperar o backoff (até ~5
+min) ou pedir para o usuário forçar.
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
