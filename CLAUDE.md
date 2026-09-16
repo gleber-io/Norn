@@ -285,6 +285,107 @@ Nenhuma das duas é bug da Fase 9; ambas são candidatas a revisão de calibraç
 (reduzir `F1RampSeconds`/aumentar o limite de memória, encurtar `CorrelationWindow`, ou configurar
 o intervalo de exportação de métricas explicitamente — decisão do usuário, não tomada aqui).
 
+**Terceira sessão de acompanhamento — as duas calibrações de timing foram feitas, e o DoD da
+Fase 9 fechou de verdade para F2 e F3, ao vivo, com evidência em Postgres. F1 ficou parcial, mas
+por um motivo diferente de tudo que veio antes.**
+
+**Duas mudanças de calibração, com justificativa registrada em código:**
+1. `Norn.BuildingBlocks.Telemetry.TelemetryHostBuilderExtensions` — intervalo de exportação de
+   métricas OTel fixado em 5s (`PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds`),
+   antes no padrão do SDK (60s, nunca configurado explicitamente). Afeta todos os serviços que
+   chamam `AddNornTelemetry` — Shop e `Norn.Worker`.
+2. `deploy/k8s/base/catalog.yaml` — limite de memória do Catalog de 256Mi para 384Mi. O próprio
+   comentário anterior no manifesto dizia que o objetivo era OOMKilled "em minutos, não em dezenas
+   de minutos" — 256Mi entregava ~30-60s, contradizendo o próprio objetivo escrito. 384Mi projeta
+   ~110s sob intensidade saturante do F1, dando à detecção+decisão uma chance real de agir antes
+   do kernel. Aplicado ao vivo via `kubectl patch` (não seria seguro reaplicar `catalog.yaml` bruto
+   por cima do Deployment real: a tag de imagem do arquivo é `placeholder`, a do cluster é o SHA do
+   build — `kubectl apply -f` teria trocado a imagem por engano).
+
+**Para as duas calibrações valerem no cluster, as três imagens do Shop precisaram ser
+reconstruídas e republicadas** (o código rodando antes era de antes desta sessão) — tag
+`dev-session` (não um SHA de commit: build a partir de código ainda não commitado, tag deliberadamente
+não-definitiva), via `docker build`/`docker push` para o registry local e `kubectl set image` nos
+três Deployments. **Isto não passou pelo `bootstrap.ps1`** — foi feito à mão, fora do fluxo padrão,
+e por isso não deve ser confundido com uma nova convenção; a próxima execução normal do
+`bootstrap.ps1` reconstrói com o SHA do commit real e sobrescreve estas imagens de qualquer forma.
+
+**Com as duas calibrações + o fix de identidade do pod (sessão anterior) no ar, rodando `Norn.Worker`
+local em modo `Active` contra tráfego real do `Norn.LoadGenerator` (novo achado: F2 precisa de
+tráfego de verdade para produzir latência — sem carga, a rampa do efeito não tem o que estrangular):**
+
+- **F2 → `ScaleUp`, DoD fechado.** `HealingPlan` decidido (`RuleEngine`, fallback do braço B),
+  réplicas de `order-api` foram de 1 para 2 de verdade (confirmado via `kubectl`), `HealingOutcome`
+  = `Succeeded`, `SloRestored = true`, persistido no Postgres. Uma tentativa anterior, mais cedo no
+  ramp do F2 (caos ainda subindo quando a janela de verificação fechou), tinha saído
+  `PartiallyApplied` — achado honesto sobre o próprio F2, não falha do Executor: a cura pode ser
+  aplicada corretamente e ainda assim não bastar enquanto o caos continua intensificando.
+- **F3 → `ToggleFeatureFlag`, DoD fechado — e apareceu sem eu precisar ativar o F3 chaos
+  explicitamente.** Sob a carga sustentada do F2 (~15 rps, várias centenas de pedidos), o gateway
+  de pagamento degradou o suficiente por conta própria para a assinatura de F3 (latência do
+  gateway/taxa de 5xx) disparar de verdade. `RuleEngine` decidiu `ToggleFeatureFlag`, a flag
+  `shop:flags:payment.gateway.bypass` foi escrita de verdade no Redis, `HealingOutcome` =
+  `Succeeded`, `SloRestored = true`. Confirma que o laço reage a degradação real de carga, não só a
+  caos sintético — e confirma `RedisFeatureFlagWriter` escrevendo em Redis de verdade pela primeira
+  vez nesta fase.
+- **F1 → `RestartPod` disparou de verdade, com UID correto — a correção da sessão anterior está
+  confirmada — mas `PartiallyApplied`, não `Succeeded`.** `HealingPlan` decidido pelo LLM, `target.pod`
+  = nome real do pod (`catalog-api-64987fd67c-gx87b`), `target.podUid`/`parameters.podUid` idênticos
+  e não nulos — a pré-condição de UID (§5.4) aceitou porque o pod resolvido batia com o pod vivo,
+  exatamente o que a Fase 9 tarefa 2 exige. O Executor aplicou o `DeleteNamespacedPodAsync` de
+  verdade. `SloRestored = false` só porque a janela de verificação (120s) fechou antes de o RSS do
+  pod recém-criado assentar abaixo do limiar de restauração — não é o mesmo problema documentado
+  acima (aquele era "nunca detecta"; este é "detecta, decide e age corretamente, mas a verificação
+  é apertada demais para este caso"). Registrar como item de calibração adicional, não resolvido:
+  o limiar de restauração do F1 (`ExecutorOptions.MemoryRestoredThresholdBytes`) ou a janela de
+  verificação podem precisar de ajuste fino separado do que já foi feito aqui.
+- **Modo `Observe` confirmado ao vivo, de graça, na troca de modo em produção:** um `HealingPlan`
+  (`ScaleUp`, decidido pelo LLM) foi criado para um sinal Critical do gateway de pagamento
+  **depois** de eu já ter revertido o modo para `Observe` — a linha ficou em `healing_plans` mas
+  **nenhuma** linha correspondente apareceu em `healing_outcomes`, e as réplicas do Payment
+  continuaram em 1. Confirma a leitura fresca de modo por ciclo (`PlanExecuteAndPersistAsync` lê o
+  modo de novo antes de decidir se chama o Executor) e o comportamento "planeja, nunca atua" do
+  ADR-05.
+- **Modo `DryRun` — confirmado só parcialmente.** O log mostrou sinais sendo detectados com
+  `(modo DryRun)` de verdade (a leitura de modo está correta), mas nenhum `HealingPlan` chegou a
+  fechar dentro do tempo desta sessão para esse modo especificamente — o achado estrutural (nenhuma
+  escrita de estado até `DryRun` produzir um plano completo) continua coberto só por teste unitário
+  (`ExecuteAsync_DryRun_NeverTouchesClusterOrRedis`, `ExecuteAsync_DryRun_ToggleFeatureFlag_NeverCallsFeatureFlagWriter`),
+  não por replay ao vivo completo.
+- **Circuit breaker — decisão consciente de não tentar ao vivo nesta sessão.** Forçar 5 falhas
+  reais consecutivas exigiria quebrar a RBAC de propósito e esperar vários ciclos de detecção — o
+  cooldown geral (ADR-04) só é gravado em sucesso, então falhas repetidas no mesmo alvo não são
+  bloqueadas por cooldown, mas cada ciclo ainda depende da janela de correlação (~60s) mais o tempo
+  de decisão. Dado o teste de estresse sob concorrência real já existente
+  (`RecordFailure_UnderConcurrency_ReportsTripExactlyOncePerThresholdCrossing`) e o tempo já
+  investido nesta sessão, ficou de fora — item explicitamente em aberto, não esquecido.
+
+**Tarefa 8 — manifestos K8s do Norn em `norn-platform`, feita, mas deliberadamente não ligada ao
+fluxo padrão.** `src/Platform/Norn.Worker/Dockerfile` criado (mesmo padrão dos Dockerfiles do
+Shop); `deploy/k8s/base/norn-platform.yaml` novo — `Deployment` do `Norn.Worker` em
+`norn-platform`, `serviceAccountName: norn-executor`, variáveis de ambiente para Postgres/Redis/
+Prometheus/Ollama via `host.k3d.internal` (mesmo caminho que o Shop já usa); registrado em
+`deploy/k8s/base/kustomization.yaml`. `rbac-norn.yaml` corrigido: o `ServiceAccount norn-executor`
+mudou de `norn-shop` para `norn-platform` (onde o Pod de fato roda), `RoleBinding` atualizado para
+referenciar o `ServiceAccount` no namespace certo — aplicado ao vivo e revalidado com
+`kubectl auth can-i --as=system:serviceaccount:norn-platform:norn-executor` (positivo em
+`norn-shop`). **Decisão explícita: não conectado ao `bootstrap.ps1`.** A imagem
+`norn-platform-worker:placeholder` não é construída por nenhum passo automático — aplicar
+`norn-platform.yaml` sem build prévio deixa o Deployment em `ImagePullBackOff`. O motivo é
+proteger o modelo operacional atual (Worker rodando no host via `dotnet run`, usado em toda
+validação ao vivo das Fases 7-9) de uma mudança de comportamento que o usuário não pediu — ligar
+isso ao bootstrap é uma decisão do usuário, não algo para assumir por conta própria. Um
+`ServiceAccount norn-executor` órfão ficou para trás em `norn-shop` (o antigo, pré-correção) —
+tentativa de removê-lo foi negada por permissão; inofensivo (sem `RoleBinding` apontando para ele),
+mas registrado aqui para quem for limpar depois.
+
+**Estado do cluster ao fim desta sessão:** as três imagens do Shop estão em `dev-session` (não um
+SHA de commit — a próxima `bootstrap.ps1` sobrescreve), réplicas de volta ao baseline (1 cada),
+`shop:flags:payment.gateway.bypass = false`, caos desativado, modo `Observe`, `Norn.Worker` e
+`Norn.LoadGenerator` locais encerrados. O limite de memória do Catalog ficou em 384Mi **só no
+cluster ao vivo** (via `kubectl patch`) — `deploy/k8s/base/catalog.yaml` também foi atualizado, então
+uma reaplicação futura do manifesto (`bootstrap.ps1` ou `kubectl apply -k`) mantém 384Mi.
+
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
 ADRs → docs/adr/

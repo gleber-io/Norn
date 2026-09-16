@@ -40,10 +40,15 @@ spec:
               cpu: 100m
               memory: 128Mi
             limits:
-              # Baixo de propósito (192-256Mi): é o teto que faz F1 produzir
-              # OOMKilled em minutos, não em dezenas de minutos (Fase 5/6).
+              # Ajustado na Fase 9 (achado do replay ao vivo, CLAUDE.md): com baseline ~192-217MB e
+              # F1MaxRetainedBytes=300MB/F1RampSeconds=90 (Fase 5), 256Mi produzia OOMKilled em
+              # ~30-60s — mais rápido que a janela de correlação de 60s (Fase 7) e o próprio
+              # objetivo original deste comentário ("minutos, não dezenas de minutos"). 384Mi
+              # projeta o estouro para ~110s sob intensidade saturante, dando à detecção+decisão
+              # uma chance real de agir antes do kernel. Provisório: a calibração final para a
+              # campanha (Fase 12) é decisão do usuário, não travada aqui.
               cpu: 250m
-              memory: 256Mi
+              memory: 384Mi
           startupProbe:
             httpGet:
               path: /health/live

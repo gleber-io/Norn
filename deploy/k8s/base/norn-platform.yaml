@@ -1,0 +1,67 @@
+# Fase 9, tarefa 8 — Norn.Worker em norn-platform, usando o ServiceAccount restrito do ADR-03
+# (rbac-norn.yaml). Placeholder até o primeiro build real, mesmo padrão do Shop antes da Fase 2
+# (deploy/k8s/base/catalog.yaml) — bootstrap.ps1 ainda não constrói nem publica esta imagem
+# (Dockerfile em src/Platform/Norn.Worker/Dockerfile), então aplicar este manifesto sem build
+# prévio deixa o Deployment em ImagePullBackOff. Fora do fluxo padrão de bootstrap por decisão
+# explícita (CLAUDE.md): a operação atual roda o Worker no host via `dotnet run` (ADR-09), e
+# ligar isto ao bootstrap.ps1 trocaria esse modelo por padrão sem pedido do usuário.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: norn-worker
+  namespace: norn-platform
+  labels:
+    app: norn-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: norn-worker
+  template:
+    metadata:
+      labels:
+        app: norn-worker
+    spec:
+      serviceAccountName: norn-executor
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 5678
+      containers:
+        - name: norn-worker
+          image: norn-platform-worker:placeholder
+          env:
+            # Mesmo caminho de rede que o Shop já usa para as mesmas dependências
+            # (deploy/k8s/base/config.yaml) — Postgres, Redis, Prometheus e Ollama vivem fora
+            # do cluster (ADR-09, ADR-10).
+            - name: ConnectionStrings__Knowledge
+              value: "Host=host.k3d.internal;Database=norn;Username=norn;Password=norn"
+            - name: Redis__ConnectionString
+              value: "host.k3d.internal:6379"
+            - name: Norn__Monitor__PrometheusBaseUrl
+              value: "http://host.k3d.internal:9090"
+            - name: Norn__Planner__OllamaBaseUrl
+              value: "http://host.k3d.internal:11434"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://host.k3d.internal:4317"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: dataprotection-keys
+              mountPath: /home/nornapp/.aspnet/DataProtection-Keys
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: dataprotection-keys
+          emptyDir: {}

@@ -63,7 +63,12 @@ public static class TelemetryHostBuilderExtensions
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .SetExemplarFilter(ExemplarFilterType.TraceBased)
-                .AddOtlpExporter());
+                // Achado do replay ao vivo da Fase 9: o padrão do SDK (60s) é mais lento que a
+                // corrida entre o F1 e o OOMKilled sob o limite de memória do Catalog — o
+                // Analyzer via uma leitura de RSS parada por dezenas de segundos enquanto o
+                // processo já tinha estourado o limite. 5s alinha com Norn.Monitor.MonitorOptions.PollInterval.
+                .AddOtlpExporter((_, readerOptions) =>
+                    readerOptions.PeriodicExportingMetricReaderOptions.ExportIntervalMilliseconds = 5000));
 
         builder.Logging.AddOpenTelemetry(logging =>
         {
