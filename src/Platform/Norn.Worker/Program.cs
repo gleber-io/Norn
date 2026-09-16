@@ -8,6 +8,7 @@ using Norn.Knowledge;
 using Norn.Monitor;
 using Norn.Planner;
 using Norn.Worker;
+using Norn.Worker.Events;
 using StackExchange.Redis;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -23,6 +24,7 @@ builder.Services.AddNornAnalyzer(builder.Configuration);
 builder.Services.AddNornPlanner(builder.Configuration);
 builder.Services.AddNornExecutor(builder.Configuration);
 builder.Services.AddNornFeatureFlags(connectionMultiplexer);
+builder.Services.AddSingleton<PlatformEventPublisher>();
 
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddHostedService<AnomalyPipelineBackgroundService>();

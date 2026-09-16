@@ -11,9 +11,8 @@ namespace Norn.ArchitectureTests;
 /// Regras de dependência entre projetos (§4). Shop.Contracts → Norn.Contracts (Fase 1),
 /// Norn.Platform.* → BuildingBlocks.Chaos (ADR-13) e Norn.Monitor/Norn.Analyzer/Norn.Planner/
 /// Norn.Executor → Norn.Knowledge (ADR-17, os quatro lados existem desde a Fase 9) já são cobertos
-/// por assembly real. A proibição restante — Norn.Worker → Norn.API — entra quando o projeto do
-/// outro lado existir (Fase 10): uma regra sem assembly do lado proibido passa em verde sobre um
-/// conjunto vazio, para sempre.
+/// por assembly real. Norn.Worker → Norn.API (Fase 10) também: o link entre os dois processos é
+/// só o canal Redis norn:events (ADR-15), nunca uma referência de projeto.
 /// </summary>
 public sealed class ProjectDependencyRulesTests
 {
@@ -24,6 +23,8 @@ public sealed class ProjectDependencyRulesTests
     private static readonly Assembly NornPlannerAssembly = typeof(Norn.Planner.Settings.PlannerOptions).Assembly;
     private static readonly Assembly NornExecutorAssembly = typeof(Norn.Executor.Settings.ExecutorOptions).Assembly;
     private static readonly Assembly NornKnowledgeAssembly = typeof(Norn.Knowledge.KnowledgeDbContext).Assembly;
+    private static readonly Assembly NornWorkerAssembly = typeof(Norn.Worker.Events.PlatformEventPublisher).Assembly;
+    private static readonly Assembly NornApiAssembly = typeof(Norn.API.Hubs.NornHub).Assembly;
 
     public static TheoryData<Assembly> PlatformAssemblies => new()
     {
@@ -91,6 +92,37 @@ public sealed class ProjectDependencyRulesTests
         var result = Types.InAssembly(NornKnowledgeAssembly)
             .Should()
             .NotHaveDependencyOn("Norn.BuildingBlocks.Chaos")
+            .GetResult();
+
+        result.IsSuccessful.ShouldBeTrue(string.Join(", ", result.FailingTypeNames ?? []));
+    }
+
+    /// <summary>
+    /// O link entre Worker e API é o canal Redis norn:events (ADR-15) — o Worker publica uma
+    /// mensagem, nunca conhece o hub nem o IHubContext (Fase 10).
+    /// </summary>
+    [Fact]
+    public void NornWorker_Should_NotDependOn_NornApi()
+    {
+        var result = Types.InAssembly(NornWorkerAssembly)
+            .Should()
+            .NotHaveDependencyOn("Norn.API")
+            .GetResult();
+
+        result.IsSuccessful.ShouldBeTrue(string.Join(", ", result.FailingTypeNames ?? []));
+    }
+
+    /// <summary>
+    /// Norn.API é composition root do processo BFF (ADR-17, §4) — referencia só Norn.Contracts e
+    /// Norn.Knowledge. Ler estado ao vivo do cluster ou compor o loop MAPE-K não é papel dele
+    /// (Fase 10).
+    /// </summary>
+    [Fact]
+    public void NornApi_Should_NotDependOn_MapeKProjects()
+    {
+        var result = Types.InAssembly(NornApiAssembly)
+            .Should()
+            .NotHaveDependencyOnAny("Norn.Monitor", "Norn.Analyzer", "Norn.Planner", "Norn.Executor", "Norn.Worker")
             .GetResult();
 
         result.IsSuccessful.ShouldBeTrue(string.Join(", ", result.FailingTypeNames ?? []));

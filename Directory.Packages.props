@@ -107,4 +107,14 @@
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.12" />
   </ItemGroup>
 
+  <!-- Fase 10: Norn.API — SignalR server vem do shared framework (Microsoft.AspNetCore.App,
+       Sdk="Microsoft.NET.Sdk.Web"), sem PackageReference próprio. O client só entra no projeto de
+       teste de integração, para o cliente de hub da tarefa 8. OpenApi serve /openapi/v1.json em
+       runtime (§0.3 do plano da fase — Microsoft.Extensions.ApiDescription.Server, geração em
+       build-time, fica para quando a Fase 11 realmente precisar dele). -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
+  </ItemGroup>
+
 </Project>

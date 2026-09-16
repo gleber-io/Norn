@@ -24,6 +24,7 @@ public static class KnowledgeServiceCollectionExtensions
         services.AddMemoryCache();
         services.AddSingleton(connectionMultiplexer);
         services.AddScoped<IKnowledgeStore, KnowledgeStore>();
+        services.AddScoped<IKnowledgeReader, KnowledgeReader>();
         services.AddSingleton<ICooldownStore, RedisCooldownStore>();
         services.AddSingleton<IPlatformConfig, RedisPlatformConfig>();
         services.AddSingleton<IFeatureFlagWriter, RedisFeatureFlagWriter>();

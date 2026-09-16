@@ -66,7 +66,14 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 Minimal API, Clean Architecture por pasta, vertical slice dentro de `Features/`, TypedResults, LoggerMessage, naming de testes `MethodName_Scenario_ExpectedBehavior`.
 
 ## Estado atual
-Fase concluída: 8. Próxima: 9.
+Fase 8 concluída. **Fase 9 (Executor) implementada, commitada e majoritariamente validada ao
+vivo — não fechada pelo padrão rigoroso de DoD integral.** F2 e F3 fecharam o DoD ao vivo
+(`ScaleUp`/`ToggleFeatureFlag`, `SloRestored=true`, evidência no Postgres); F1 (`RestartPod`)
+dispara de verdade com UID correto mas fica `PartiallyApplied` (janela de verificação curta
+demais); `DryRun` e o circuit breaker não foram exercitados em replay ao vivo completo (só teste
+unitário). Tarefa 8 (manifestos K8s) feita, não ligada ao `bootstrap.ps1`. Detalhe completo abaixo.
+Decisão tomada: avançar para a Fase 10 em vez de fechar os residuais de F1/DryRun/breaker — ver
+detalhe da Fase 10 abaixo.
 
 Cluster k3d validado de ponta a ponta (Fase 6): `bootstrap.ps1` leva de zero a sistema funcional em um comando, fluxo completo de pedido roda dentro do cluster, RBAC do ADR-03 confirmado (positivo e negativo), `maxReplicas=3` valida escala real, Traefik ausente (D9), `container_memory_working_set_bytes`/`container_cpu_usage_seconds_total` via cAdvisor fecham o DoD da Fase 4.
 
@@ -385,6 +392,74 @@ SHA de commit — a próxima `bootstrap.ps1` sobrescreve), réplicas de volta ao
 `Norn.LoadGenerator` locais encerrados. O limite de memória do Catalog ficou em 384Mi **só no
 cluster ao vivo** (via `kubectl patch`) — `deploy/k8s/base/catalog.yaml` também foi atualizado, então
 uma reaplicação futura do manifesto (`bootstrap.ps1` ou `kubectl apply -k`) mantém 384Mi.
+
+**Fase 10 — Norn.API (BFF + SignalR), implementada e testada; replay ao vivo com o Worker rodando
+junto ainda não feito.** `Norn.API` criado do zero (era só uma pasta com `.gitkeep`): sete
+endpoints REST (`GET /api/v1/topology|signals|plans|outcomes|mode`, `PUT /api/v1/mode`,
+`GET /api/v1/experiments/{runId}`) no padrão Minimal API do Shop (`TypedResults`, validação por
+endpoint filter, `MapApiVersion`); `NornHub : Hub<INornHubClient>` com os seis métodos
+servidor→cliente do ADR-15; `PlatformEventRelay` (assinante de `norn:events`, `IHostedService`
+puro — mesmo padrão de `PlatformConfigInvalidationSubscriber`, sem laço, só callback); health
+check dedicado (`norn-events-subscriber`, tag `ready`) para a falha silenciosa "assinante caído
+com API no ar"; OpenAPI em `/openapi/v1.json` via `Microsoft.AspNetCore.OpenApi` (runtime só —
+`Microsoft.Extensions.ApiDescription.Server`, build-time, fica para quando a Fase 11 precisar).
+`Norn.Contracts` ganhou `IKnowledgeReader` (port novo, só leitura — `IKnowledgeStore` continua
+write-only), `ExperimentRunSummary`, `PlatformEventTypes`, `PlatformEventEnvelope<TPayload>`.
+`Norn.Knowledge` ganhou `KnowledgeReader` (implementação de `IKnowledgeReader` sobre
+`KnowledgeDbContext`, desserializando `payload` com as mesmas opções — sem conversor de enum —
+que `CanonicalJson` usa para gravar).
+
+**O ponto único de publicação em `norn:events`** (ADR-15 — "só a Worker publica, nenhum outro
+processo escreve no canal") é `Norn.Worker.Events.PlatformEventPublisher`, `public` (não
+`internal`) pelo mesmo motivo que já levou `KubernetesTopologyReader` a virar público na Fase 9:
+`Norn.ArchitectureTests` precisa do `typeof(...).Assembly` para o `[Fact]` novo
+(`NornWorker_Should_NotDependOn_NornApi`) — teste que já estava pré-anunciado no comentário da
+classe desde a Fase 9. `AnomalyPipelineBackgroundService` publica nos seis pontos: `SignalDetected`
+(após persistir o sinal — `correlationId` é o `signalId`, porque o `AnomalyContext` real ainda não
+existe nesse instante), `TopologyUpdated` (após persistir o contexto, não antes — `CorrelationId`
+só existe depois do `ContextCorrelator.BuildContext`), `PlanCreated` (após persistir o plano),
+`ActionApplied`+`OutcomeVerified` (os dois carregam o mesmo `HealingOutcome`, disparados em
+sequência — o Executor aplica e verifica de forma síncrona hoje, não existe sinal intermediário
+real entre os dois, e criar um tocaria `Norn.Executor`, fora do escopo desta fase) e `ModeChanged`
+(por **diff no polling de 5s** do Worker, não por um publish dentro de
+`IPlatformConfig.SetModeAsync`: esse método roda em código compartilhado que tanto o Worker quanto
+a API executam, e publicar ali violaria "só o Worker publica" sempre que `PUT /api/v1/mode`
+chamasse). `PutModeTests.PutMode_NeverPublishesToNornEvents` prova isso automatizado, assinando o
+canal durante a chamada e afirmando zero mensagens.
+
+**Testes**: 18 novos em `Norn.API.UnitTests` (validadores FluentValidation dos cinco endpoints com
+parâmetro). 15 novos em `Norn.API.IntegrationTests` — primeiro consumidor de `Testcontainers.Redis`
+no repositório e primeiro uso de `Microsoft.AspNetCore.SignalR.Client` — cobrindo a tarefa 8 do DoD
+ao pé da letra (publica os seis `eventType` direto no Redis via Testcontainers, **sem subir o
+Worker**, e afirma que cada um chega a um `HubConnection` real via long polling contra o
+`TestServer`), o envelope malformado seguido de um válido (o assinante sobrevive e o válido chega),
+os cinco GETs contra Postgres real e o health check com as duas dependências reais no ar. Um
+`[Fact]` novo em `Norn.ArchitectureTests` (22 no total, antes 21) fecha a proibição
+Worker→API que o comentário da classe já anunciava desde a Fase 9. `dotnet build` e
+`dotnet format --verify-no-changes` limpos.
+
+**Smoke test ao vivo contra a infra real** (`norn-postgres`/`norn-redis` já de pé de uma sessão
+anterior, sem subir o Worker): `dotnet run --project src/Platform/Norn.API` conectou, migrou (sem
+mudança — schema já existente), e respondeu 200 em `/health/live`, `/health/ready`,
+`/api/v1/mode` (`Observe`, o padrão seguro) e `/api/v1/topology` — que devolveu dado real
+persistido por sessões anteriores das Fases 7-9 (`Norn.Shop.Catalog.API`/`Order.API`/`Payment.API`
+com réplicas e limites de recurso reais), confirmando que `GetLatestTopologyAsync` lê o Knowledge
+de verdade, não um dublê. `/openapi/v1.json` devolveu um documento OpenAPI 3.1.1 válido.
+Publicação direta no Redis real via `docker exec norn-redis redis-cli PUBLISH` (um envelope
+malformado seguido de um válido) confirmou, fora do ambiente Testcontainers, que o assinante
+recebeu as duas mensagens (`PUBLISH` retornou 1 assinante nas duas) e `/health/ready` continuou 200
+depois — mesma prova do teste automatizado, mas contra o processo real. Processo encerrado ao
+final; `mode` nunca foi alterado (permaneceu `Observe`); o smoke test não persistiu nada no
+`norn-postgres` real além das leituras.
+
+**Não validado ainda — fica para uma sessão de replay ao vivo, seguindo a prática das Fases 7-9**:
+Worker e API rodando ao mesmo tempo como processos separados com uma anomalia real disparando os
+seis eventos em sequência até um cliente SignalR (a "janela < 500ms" do DoD depende de medir isso
+ao vivo, não só via Testcontainers); `PUT /api/v1/mode` mudando o comportamento do Worker em
+runtime sem restart (só a ausência de publish foi provada, não a propagação real de modo);
+derrubar o container Redis com a API no ar e confirmar `/health/ready` virar unhealthy
+especificamente pelo check `norn-events-subscriber` (só o caminho saudável foi testado, ao vivo e
+via Testcontainers).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)

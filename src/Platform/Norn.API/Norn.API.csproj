@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>norn-api</UserSecretsId>
+  </PropertyGroup>
+
+  <!-- Composition root do processo BFF (ADR-17, §4). Referencia só Norn.Contracts e
+       Norn.Knowledge — nunca Norn.Monitor/Analyzer/Planner/Executor/Worker. O link com
+       Norn.Worker é o canal Redis norn:events (ADR-15), não uma referência de projeto. -->
+  <ItemGroup>
+    <PackageReference Include="StackExchange.Redis" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="FluentValidation" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Norn.Contracts\Norn.Contracts.csproj" />
+    <ProjectReference Include="..\Norn.Knowledge\Norn.Knowledge.csproj" />
+    <ProjectReference Include="..\..\BuildingBlocks\Norn.BuildingBlocks.Telemetry\Norn.BuildingBlocks.Telemetry.csproj" />
+    <ProjectReference Include="..\..\BuildingBlocks\Norn.BuildingBlocks.Web\Norn.BuildingBlocks.Web.csproj" />
+  </ItemGroup>
+
+</Project>

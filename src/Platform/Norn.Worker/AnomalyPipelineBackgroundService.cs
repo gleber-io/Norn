@@ -14,6 +14,7 @@ using Norn.Executor.Telemetry;
 using Norn.Monitor;
 using Norn.Monitor.Prometheus;
 using Norn.Planner.LlmPlanning;
+using Norn.Worker.Events;
 
 namespace Norn.Worker;
 
@@ -49,6 +50,7 @@ internal sealed partial class AnomalyPipelineBackgroundService(
     LlmPlanner llmPlanner,
     HealingActionExecutor healingActionExecutor,
     ExecutorMetrics executorMetrics,
+    PlatformEventPublisher eventPublisher,
     IOptions<AnalyzerOptions> analyzerOptions,
     IOptions<MonitorOptions> monitorOptions,
     TimeProvider timeProvider,
@@ -56,6 +58,15 @@ internal sealed partial class AnomalyPipelineBackgroundService(
 {
     private readonly TargetCorrelationBuffer correlationBuffer = new();
     private readonly ConcurrentDictionary<string, Task> targetsInFlight = new();
+
+    /// <summary>
+    /// Suporte ao diff de <see cref="PlatformEventTypes.ModeChanged"/> (Fase 10, §0.2 do plano):
+    /// só Norn.Worker publica em <c>norn:events</c>, então a mudança de modo — que pode ter sido
+    /// pedida via <c>PUT /api/v1/mode</c> em Norn.API — chega ao canal pela borda detectada aqui,
+    /// não por um publish dentro de <c>IPlatformConfig.SetModeAsync</c> (código compartilhado
+    /// pelos dois processos, o que violaria "único publicador").
+    /// </summary>
+    private PlatformMode? previousMode;
 
     /// <summary>
     /// Drena as execuções destacadas em voo antes de o host terminar — sem isto, um shutdown no
@@ -109,12 +120,27 @@ internal sealed partial class AnomalyPipelineBackgroundService(
         var mode = await platformConfig.GetModeAsync(cancellationToken);
         executorMetrics.RecordMode(mode);
 
+        if (previousMode is not null && previousMode != mode)
+        {
+            // Latência de detecção limitada ao intervalo de polling (5s por padrão) — aceitável,
+            // best-effort por ADR-15. Guarda contra o primeiro tick: o dashboard recebe o modo de
+            // partida via GET /api/v1/mode ao conectar, não por um evento que ninguém ouviria.
+            await eventPublisher.PublishAsync(PlatformEventTypes.ModeChanged, timeProvider.GetUtcNow(), null, Guid.NewGuid(), mode, cancellationToken);
+        }
+
+        previousMode = mode;
+
         foreach (var sample in sampleBuffer.DrainNew())
         {
             foreach (var signal in detectorEngine.Observe(sample))
             {
                 LogSignalDetected(logger, signal.MetricName, signal.Target.Service, signal.Severity, mode);
                 await knowledgeStore.SaveAnomalySignalAsync(signal, cancellationToken);
+                // correlationId: AnomalySignal não carrega um próprio — o AnomalyContext que vai
+                // nascer desta janela ainda não existe agora, então usamos o signalId (§0.1 do
+                // plano da Fase 10). TopologyUpdated/PlanCreated/... desta mesma cadeia usam o
+                // correlationId real do AnomalyContext.
+                await eventPublisher.PublishAsync(PlatformEventTypes.SignalDetected, signal.DetectedAtUtc, signal.ExperimentRunId, signal.SignalId, signal, cancellationToken);
                 correlationBuffer.Add(signal, timeProvider.GetUtcNow());
             }
         }
@@ -180,6 +206,10 @@ internal sealed partial class AnomalyPipelineBackgroundService(
         await knowledgeStore.SaveAnomalyContextAsync(context, cancellationToken);
         LogContextPersisted(logger, context.ContextId, service, context.PrimarySignal.MetricName, signals.Count);
 
+        // Publicado aqui, não logo após GetTopologyAsync: context.CorrelationId só existe depois
+        // de ContextCorrelator.BuildContext retornar.
+        await eventPublisher.PublishAsync(PlatformEventTypes.TopologyUpdated, context.CreatedAtUtc, context.ExperimentRunId, context.CorrelationId, context.Topology, cancellationToken);
+
         return context;
     }
 
@@ -236,6 +266,7 @@ internal sealed partial class AnomalyPipelineBackgroundService(
             var plan = await llmPlanner.DecideAsync(context, cancellationToken);
             await scopedKnowledgeStore.SaveHealingPlanAsync(plan, cancellationToken);
             LogPlanCreated(logger, plan.PlanId, context.ContextId, plan.DecidedBy, plan.Actions.Count > 0 ? plan.Actions[0].Type : HealingActionType.NoOp);
+            await eventPublisher.PublishAsync(PlatformEventTypes.PlanCreated, plan.CreatedAtUtc, context.ExperimentRunId, context.CorrelationId, plan, cancellationToken);
 
             var mode = await platformConfig.GetModeAsync(cancellationToken);
             if (mode == PlatformMode.Observe)
@@ -246,6 +277,12 @@ internal sealed partial class AnomalyPipelineBackgroundService(
             var outcome = await healingActionExecutor.ExecuteAsync(plan, context.RecentMetrics, dryRun: mode == PlatformMode.DryRun, cancellationToken);
             await scopedKnowledgeStore.SaveHealingOutcomeAsync(outcome, cancellationToken);
             LogOutcomeVerified(logger, outcome.OutcomeId, plan.PlanId, outcome.Status, outcome.SloRestored);
+
+            // O Executor aplica e verifica de forma síncrona — não existe um sinal intermediário
+            // real entre os dois. ActionApplied e OutcomeVerified carregam o mesmo HealingOutcome,
+            // disparados em sequência, distinguidos por occurredAtUtc (§0.3 do plano da Fase 10).
+            await eventPublisher.PublishAsync(PlatformEventTypes.ActionApplied, outcome.AppliedAtUtc, context.ExperimentRunId, context.CorrelationId, outcome, cancellationToken);
+            await eventPublisher.PublishAsync(PlatformEventTypes.OutcomeVerified, outcome.VerifiedAtUtc, context.ExperimentRunId, context.CorrelationId, outcome, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
