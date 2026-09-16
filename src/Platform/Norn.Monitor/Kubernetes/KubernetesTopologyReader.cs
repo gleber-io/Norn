@@ -10,7 +10,7 @@ namespace Norn.Monitor.Kubernetes;
 /// escrita — os verbos de escrita são do Norn.Executor). Fonte do <c>TopologyUpdated</c> do
 /// NornHub (§5.6, Fase 10).
 /// </summary>
-internal sealed class KubernetesTopologyReader(IKubernetes kubernetesClient, IOptions<MonitorOptions> options) : ITopologyReader
+public sealed class KubernetesTopologyReader(IKubernetes kubernetesClient, IOptions<MonitorOptions> options) : ITopologyReader
 {
     public async Task<TopologyInfo> GetTopologyAsync(string service, string namespaceName, CancellationToken cancellationToken)
     {
@@ -46,6 +46,21 @@ internal sealed class KubernetesTopologyReader(IKubernetes kubernetesClient, IOp
     {
         var pod = await TryReadPodAsync(namespaceName, podName, cancellationToken);
         return pod?.Metadata?.Uid;
+    }
+
+    /// <summary>
+    /// Mesmo rótulo <c>app</c> que os manifestos do Shop (deploy/k8s/base) já usam no seletor do
+    /// Deployment — <see cref="MonitorOptions.ServiceToDeploymentName"/> resolve o valor certo, o
+    /// mesmo mapa que já resolve o nome do Deployment.
+    /// </summary>
+    public async Task<string?> GetCurrentPodNameAsync(string service, string namespaceName, CancellationToken cancellationToken)
+    {
+        var deploymentName = options.Value.ServiceToDeploymentName.GetValueOrDefault(service, service);
+        var pods = await kubernetesClient.CoreV1.ListNamespacedPodAsync(
+            namespaceName, labelSelector: $"app={deploymentName}", cancellationToken: cancellationToken);
+
+        var pod = pods.Items.FirstOrDefault(p => p.Status?.Phase == "Running") ?? pods.Items.FirstOrDefault();
+        return pod?.Metadata?.Name;
     }
 
     public async Task<string?> GetLastTerminationReasonAsync(string namespaceName, string podName, CancellationToken cancellationToken)

@@ -161,9 +161,10 @@ internal sealed partial class AnomalyPipelineBackgroundService(
         var recentMetrics = await recentMetricsReader.ReadAsync(service, cancellationToken);
         var isInCooldown = await cooldownStore.IsInCooldownAsync(service, cancellationToken);
         var activeFlags = await ReadActiveFeatureFlagsAsync(cancellationToken);
+        var resolvedSignals = await ResolvePodIdentityAsync(service, primaryTarget.Namespace, signals, cancellationToken);
 
         var context = ContextCorrelator.BuildContext(
-            signals,
+            resolvedSignals,
             contextId: Guid.NewGuid(),
             correlationId: Guid.NewGuid(),
             experimentRunId: null,
@@ -180,6 +181,37 @@ internal sealed partial class AnomalyPipelineBackgroundService(
         LogContextPersisted(logger, context.ContextId, service, context.PrimarySignal.MetricName, signals.Count);
 
         return context;
+    }
+
+    /// <summary>
+    /// Achado do replay ao vivo da Fase 9: as métricas chegam ao Prometheus via OTel Collector sem
+    /// enriquecimento <c>k8sattributes</c>, então nenhuma carrega o rótulo <c>pod</c> nativo — o
+    /// <c>Target.Pod</c> vindo do Monitor é o <c>exported_instance</c> (UUID de instância OTel),
+    /// deixando <c>RestartPod</c> sem UID confiável em todo contexto construído ao vivo (confirmado
+    /// pelo rationale do LLM: "falta UID para RestartPod"). Resolve a identidade real do pod via
+    /// <see cref="ITopologyReader.GetCurrentPodNameAsync"/> (baseline de 1 réplica por serviço,
+    /// Fase 6 — sem ambiguidade) e substitui só nos sinais que alimentam este
+    /// <see cref="AnomalyContext"/>; as linhas já persistidas em <c>anomaly_signals</c> (tarefa 3 da
+    /// Fase 7, antes da correlação) mantêm o valor original — limitação conhecida, documentada, não
+    /// resolvida aqui porque tocaria o ponto de persistência por amostra, fora do escopo deste
+    /// achado. Sem pod <c>Running</c> (ex.: durante um crash loop), os sinais saem sem
+    /// <c>Pod</c>/<c>PodUid</c> — o mesmo efeito seguro de antes, <c>RestartPod</c> permanece
+    /// inviável, nunca uma exceção.
+    /// </summary>
+    private async Task<IReadOnlyList<AnomalySignal>> ResolvePodIdentityAsync(
+        string service, string namespaceName, IReadOnlyList<AnomalySignal> signals, CancellationToken cancellationToken)
+    {
+        var podName = await topologyReader.GetCurrentPodNameAsync(service, namespaceName, cancellationToken);
+        if (podName is null)
+        {
+            return signals;
+        }
+
+        var podUid = await topologyReader.GetPodUidAsync(service, namespaceName, podName, cancellationToken);
+
+        return signals
+            .Select(signal => signal with { Target = signal.Target with { Pod = podName, PodUid = podUid } })
+            .ToList();
     }
 
     /// <summary>

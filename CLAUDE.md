@@ -254,6 +254,37 @@ Worker hoje) mas sua `Role` real já foi validada diretamente (achado 1 acima).
 seguro, ADR-05), caos F1 desativado, `Norn.Worker` local encerrado, os três pods do Shop
 `Running 1/1` — cluster deixado limpo para a próxima sessão.
 
+**Correção do bug de identidade do pod (sessão de acompanhamento seguinte) — implementada e testada,
+RestartPod ao vivo ainda não demonstrado.** `ITopologyReader` ganhou `GetCurrentPodNameAsync`
+(`Norn.Contracts.Ports`), implementado em `KubernetesTopologyReader` via `CoreV1.ListNamespacedPodAsync`
+com `labelSelector: app=<deploymentName>` (mesmo rótulo que os manifestos do Shop já usam no
+seletor do Deployment) — baseline de 1 réplica por serviço (Fase 6) torna a resolução inequívoca.
+`AnomalyPipelineBackgroundService.BuildAndPersistContextAsync` agora chama esse método antes de
+montar o contexto e substitui `Target.Pod`/`Target.PodUid` nos sinais que alimentam o
+`AnomalyContext` — as linhas já persistidas em `anomaly_signals` (antes da correlação) continuam
+com o valor antigo, limitação conhecida e aceita, não corrigida (tocaria o ponto de persistência por
+amostra, fora do escopo deste achado). 8 testes novos em `Norn.Monitor.UnitTests` (`IKubernetes`
+dublado, incluindo o caso "prefere pod `Running` sobre `Pending`"); `KubernetesTopologyReader`
+precisou virar `public` para ser testável (era `internal`, sem `InternalsVisibleTo` — mesmo padrão
+que os aplicadores do Executor já usavam). 358 testes verdes.
+
+**Duas tentativas de replay ao vivo para confirmar `RestartPod` de fato disparando — nenhuma
+alcançou o DoD, e por um motivo novo, distinto do achado anterior.** Com o Worker recém-reiniciado
+e o F1 reativado cedo demais, o `MetricDetectorEngine` ainda não tinha histórico suficiente
+(~30 amostras, ~150s) quando o `OOMKilled` chegou — confirma a orientação já registrada na Fase 7
+("F1 desativado até estabilizar... por um warmup completo"). Numa segunda tentativa, com warmup
+completo, o sinal *ainda* não disparou a tempo: a leitura de `dotnet_process_memory_working_set_bytes`
+no Prometheus ficou **parada no mesmo valor por dezenas de segundos** enquanto o RSS real do
+processo continuava subindo — o exportador de métricas OTel batcha em um intervalo (~60s, não
+confirmado por configuração explícita, só observado) mais lento que a janela entre a ativação do F1
+e o `OOMKilled` sob o limite de 256Mi. Do ponto de vista do Analyzer, a métrica parece plana até o
+próximo lote chegar — e nesse ambiente o pod já morreu antes disso. **Duas causas de timing agora
+documentadas, independentes uma da outra:** a janela de correlação de 60s (Fase 7) e o intervalo de
+exportação do OTel Collector (Fase 1/6) — ambas mais lentas que o F1 sob o limite de memória atual.
+Nenhuma das duas é bug da Fase 9; ambas são candidatas a revisão de calibração antes da Fase 12
+(reduzir `F1RampSeconds`/aumentar o limite de memória, encurtar `CorrelationWindow`, ou configurar
+o intervalo de exportação de métricas explicitamente — decisão do usuário, não tomada aqui).
+
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
 ADRs → docs/adr/
