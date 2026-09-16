@@ -37,8 +37,16 @@ public static class ChaosServiceCollectionExtensions
 
         services.AddSingleton<IChaosEffect, MemoryRetentionEffect>();
         services.AddSingleton<IChaosEffect, ConcurrencyThrottleEffect>();
-        services.AddSingleton<IChaosEffect, GatewayLatencyEffect>();
         services.AddSingleton<IChaosEffect, AbruptKillEffect>();
+
+        // GatewayLatencyEffect precisa ser a MESMA instância sob os dois contratos: é o
+        // ChaosBackgroundService quem atualiza o delay a cada tick (via IChaosEffect), e é o
+        // SimulatedPaymentGateway do Payment.API quem lê o valor atual (via IChaosGatewayDelay,
+        // ver o porquê nesse arquivo). Duas instâncias separadas deixariam o Payment.API sempre
+        // lendo delay zero.
+        services.AddSingleton<GatewayLatencyEffect>();
+        services.AddSingleton<IChaosEffect>(sp => sp.GetRequiredService<GatewayLatencyEffect>());
+        services.AddSingleton<IChaosGatewayDelay>(sp => sp.GetRequiredService<GatewayLatencyEffect>());
 
         services.AddHostedService(sp => new ChaosBackgroundService(
             sp.GetRequiredService<IChaosActivationStore>(),

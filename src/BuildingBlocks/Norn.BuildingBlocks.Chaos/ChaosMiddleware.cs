@@ -4,9 +4,10 @@ namespace Norn.BuildingBlocks.Chaos;
 
 /// <summary>
 /// Middleware fino: só existe para dar ao efeito ativo (se houver, e se ele tocar requisições —
-/// F2 e F3 tocam, F1 e F5 não) a chance de agir por requisição. Passa direto por <c>/health</c> e
-/// <c>/admin</c> — o F3 não pode atrasar o próprio endpoint que desativa o caos, e o F2 não pode
-/// travar o health check que o Kubernetes usa para decidir se o pod está vivo (Fase 6).
+/// hoje só F2 toca; F3 passa direto desde a Fase 8, ver <see cref="IChaosGatewayDelay"/>; F1 e F5
+/// não tocam requisição alguma) a chance de agir por requisição. Passa direto por <c>/health</c> e
+/// <c>/admin</c> — o F2 não pode travar o health check que o Kubernetes usa para decidir se o pod
+/// está vivo (Fase 6), nem o próprio endpoint que desativa o caos.
 /// </summary>
 internal sealed class ChaosMiddleware(RequestDelegate next, ChaosRuntimeState runtimeState)
 {

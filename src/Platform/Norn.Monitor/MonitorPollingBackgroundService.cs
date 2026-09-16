@@ -39,11 +39,20 @@ internal sealed partial class MonitorPollingBackgroundService(
                 var sample = await metricSource.QueryInstantAsync(query.PromQl, cancellationToken);
                 if (sample is not null)
                 {
-                    // O nome lógico vem do catálogo, não do rótulo __name__ da resposta: expressões
+                    // Nome lógico e serviço vêm do catálogo, não dos rótulos da resposta: expressões
                     // agregadas (histogram_quantile, sum, divisão) removem __name__ por definição do
-                    // PromQL — usar a resposta aqui geraria MetricName vazio para p99, taxa de 5xx e
-                    // errorsByType, e o SeverityCalculator não teria banda configurada para "".
-                    buffer.Append(sample with { MetricName = query.MetricName });
+                    // PromQL — usar a resposta geraria MetricName vazio. Pelo mesmo motivo, `sum by
+                    // (le)`/`sum(...)/sum(...)` também removem `exported_job`, e
+                    // PrometheusMetricSource.ToServiceTarget cai no default "unknown" — que quebra a
+                    // leitura de topologia (Deployment "unknown" não existe) para p99, taxa de 5xx,
+                    // errorsByType e latência do gateway, as quatro métricas agregadas da assinatura.
+                    // Confirmado ao vivo na Fase 8 tentando fechar o loop do F3: sinal detectado com
+                    // severidade Critical, contexto nunca persistido por causa do 404 do Kubernetes.
+                    buffer.Append(sample with
+                    {
+                        MetricName = query.MetricName,
+                        Target = sample.Target with { Service = query.Service },
+                    });
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
