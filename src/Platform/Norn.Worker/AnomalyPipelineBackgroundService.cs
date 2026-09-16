@@ -34,9 +34,6 @@ internal sealed partial class AnomalyPipelineBackgroundService(
     TimeProvider timeProvider,
     ILogger<AnomalyPipelineBackgroundService> logger) : BackgroundService
 {
-    /// <summary>Catálogo fechado de flags do Shop (§5.4) — hoje uma única entrada.</summary>
-    private static readonly string[] ShopFlagCatalog = ["payment.gateway.bypass"];
-
     private readonly TargetCorrelationBuffer correlationBuffer = new();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -109,7 +106,7 @@ internal sealed partial class AnomalyPipelineBackgroundService(
     private async Task<IReadOnlyDictionary<string, bool>> ReadActiveFeatureFlagsAsync(CancellationToken cancellationToken)
     {
         var flags = new Dictionary<string, bool>();
-        foreach (var flagName in ShopFlagCatalog)
+        foreach (var flagName in ShopFlagCatalog.All)
         {
             flags[flagName] = await featureFlags.IsEnabledAsync(flagName, cancellationToken);
         }

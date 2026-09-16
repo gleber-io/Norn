@@ -1,0 +1,72 @@
+using Norn.Contracts;
+using Norn.Planner.Barriers;
+using Norn.Planner.Settings;
+using Norn.Planner.UnitTests.TestFixtures;
+using Shouldly;
+using Xunit;
+using RuleEngineImpl = Norn.Planner.RuleEngine.RuleEngine;
+
+namespace Norn.Planner.UnitTests.RuleEngine;
+
+/// <summary>
+/// <see cref="RuleEngineImpl.Decide"/> ponta a ponta — decisão pura + barreira + montagem do
+/// <see cref="HealingPlan"/>. Suporta o DoD da Fase 8: "os dois planners produzem HealingPlan
+/// válido para F1/F2/F3 e NoOp para F5" e "cooldown ativo impede emissão de plano".
+/// </summary>
+public sealed class RuleEngineDecideTests
+{
+    private static RuleEngineImpl CreateEngine(PlannerOptions? options = null) => new(
+        options ?? new PlannerOptions(),
+        new HealingActionPreconditionChecker(options ?? new PlannerOptions()),
+        TimeProvider.System);
+
+    [Fact]
+    public void Decide_F1Signature_ProducesRestartPodDecidedByRuleEngine()
+    {
+        var context = AnomalyContextBuilder.Build(
+            primaryMetricName: "dotnet_process_memory_working_set_bytes",
+            severity: Severity.High,
+            correlatedSignals: [AnomalyContextBuilder.Correlated("dotnet_gc_pause_time_seconds_total")]);
+
+        var plan = CreateEngine().Decide(context);
+
+        plan.DecidedBy.ShouldBe(DecidedBy.RuleEngine);
+        plan.Actions.ShouldHaveSingleItem();
+        plan.Actions[0].Type.ShouldBe(HealingActionType.RestartPod);
+    }
+
+    [Fact]
+    public void Decide_F5EmptySignature_ProducesNoOp()
+    {
+        var context = AnomalyContextBuilder.Build(primaryMetricName: "norn_app_errors_total", severity: Severity.Low);
+
+        var plan = CreateEngine().Decide(context);
+
+        plan.Actions.ShouldHaveSingleItem();
+        plan.Actions[0].Type.ShouldBe(HealingActionType.NoOp);
+    }
+
+    [Fact]
+    public void Decide_TargetInCooldown_DegradesToNoOpWithFallback()
+    {
+        var context = AnomalyContextBuilder.Build(
+            primaryMetricName: "dotnet_process_memory_working_set_bytes",
+            severity: Severity.High,
+            inCooldown: true);
+
+        var plan = CreateEngine().Decide(context);
+
+        plan.DecidedBy.ShouldBe(DecidedBy.Fallback);
+        plan.Actions[0].Type.ShouldBe(HealingActionType.NoOp);
+    }
+
+    [Fact]
+    public void Decide_RationaleNeverExceeds500Characters()
+    {
+        var context = AnomalyContextBuilder.Build(inCooldown: true);
+
+        var plan = CreateEngine().Decide(context);
+
+        plan.Rationale.Length.ShouldBeLessThanOrEqualTo(500);
+    }
+}

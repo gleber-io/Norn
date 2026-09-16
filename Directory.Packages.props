@@ -92,4 +92,19 @@
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
   </ItemGroup>
 
+  <!-- Fase 8: Norn.Planner — LLM local via IChatClient direto (CLAUDE.md: o conector do Semantic
+       Kernel para Ollama não expõe seed nem num_ctx). OllamaApiClient (OllamaSharp) já implementa
+       IChatClient (Microsoft.Extensions.AI.Abstractions) diretamente — sem Microsoft.SemanticKernel
+       nem Connectors.Ollama (alpha) no meio. Microsoft.Extensions.AI pinado por ser dependência
+       transitiva do OllamaSharp (CentralPackageTransitivePinningEnabled). -->
+  <ItemGroup>
+    <PackageVersion Include="OllamaSharp" Version="5.4.30" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.0" />
+    <!-- HttpClient nomeado para o Ollama, sem handler de resiliência: o teto de 10s por tentativa
+         (§5.5) é um CancellationTokenSource próprio, não HttpClient.Timeout nem retry automático —
+         um retry escondido corromperia a contagem de tentativas que o LlmPlanner já faz na mão. -->
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.12" />
+  </ItemGroup>
+
 </Project>

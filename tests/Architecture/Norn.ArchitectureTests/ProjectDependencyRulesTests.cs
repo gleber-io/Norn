@@ -9,10 +9,10 @@ namespace Norn.ArchitectureTests;
 
 /// <summary>
 /// Regras de dependência entre projetos (§4). Shop.Contracts → Norn.Contracts (Fase 1),
-/// Norn.Platform.* → BuildingBlocks.Chaos (ADR-13) e Norn.Monitor/Norn.Analyzer → Norn.Knowledge
-/// (ADR-17, ambos os lados existem desde a Fase 7) já são cobertos por assembly real. As demais
-/// proibições — Norn.Worker → Norn.API, Planner/Executor → Norn.Knowledge — entram quando os
-/// projetos dos dois lados existirem (Fases 8, 9 e 10): uma regra sem assembly do lado proibido
+/// Norn.Platform.* → BuildingBlocks.Chaos (ADR-13) e Norn.Monitor/Norn.Analyzer/Norn.Planner →
+/// Norn.Knowledge (ADR-17, os três lados existem desde a Fase 8) já são cobertos por assembly
+/// real. As demais proibições — Norn.Worker → Norn.API, Executor → Norn.Knowledge — entram quando
+/// os projetos dos dois lados existirem (Fases 9 e 10): uma regra sem assembly do lado proibido
 /// passa em verde sobre um conjunto vazio, para sempre.
 /// </summary>
 public sealed class ProjectDependencyRulesTests
@@ -21,6 +21,7 @@ public sealed class ProjectDependencyRulesTests
     private static readonly Assembly NornContractsAssembly = typeof(AnomalyContext).Assembly;
     private static readonly Assembly NornMonitorAssembly = typeof(Norn.Monitor.MonitorOptions).Assembly;
     private static readonly Assembly NornAnalyzerAssembly = typeof(Norn.Analyzer.Detection.MetricDetectorEngine).Assembly;
+    private static readonly Assembly NornPlannerAssembly = typeof(Norn.Planner.Settings.PlannerOptions).Assembly;
     private static readonly Assembly NornKnowledgeAssembly = typeof(Norn.Knowledge.KnowledgeDbContext).Assembly;
 
     public static TheoryData<Assembly> PlatformAssemblies => new()
@@ -28,6 +29,7 @@ public sealed class ProjectDependencyRulesTests
         NornContractsAssembly,
         NornMonitorAssembly,
         NornAnalyzerAssembly,
+        NornPlannerAssembly,
     };
 
     [Fact]
