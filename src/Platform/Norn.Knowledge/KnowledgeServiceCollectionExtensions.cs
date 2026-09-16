@@ -26,6 +26,7 @@ public static class KnowledgeServiceCollectionExtensions
         services.AddScoped<IKnowledgeStore, KnowledgeStore>();
         services.AddSingleton<ICooldownStore, RedisCooldownStore>();
         services.AddSingleton<IPlatformConfig, RedisPlatformConfig>();
+        services.AddSingleton<IFeatureFlagWriter, RedisFeatureFlagWriter>();
         services.AddHostedService<PlatformConfigInvalidationSubscriber>();
 
         return services;

@@ -27,6 +27,7 @@
     <ProjectReference Include="..\..\..\src\Platform\Norn.Monitor\Norn.Monitor.csproj" />
     <ProjectReference Include="..\..\..\src\Platform\Norn.Analyzer\Norn.Analyzer.csproj" />
     <ProjectReference Include="..\..\..\src\Platform\Norn.Planner\Norn.Planner.csproj" />
+    <ProjectReference Include="..\..\..\src\Platform\Norn.Executor\Norn.Executor.csproj" />
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Contracts\Norn.Shop.Contracts.csproj" />
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Catalog.API\Norn.Shop.Catalog.API.csproj" />
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Order.API\Norn.Shop.Order.API.csproj" />

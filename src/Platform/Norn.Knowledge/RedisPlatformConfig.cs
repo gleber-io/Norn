@@ -64,6 +64,21 @@ internal sealed partial class RedisPlatformConfig(
         return forecast;
     }
 
+    /// <summary>
+    /// Fase 10 (<c>PUT /api/v1/mode</c>) e Fase 9 (circuit breaker, ADR-04 barreira c). Publica no
+    /// mesmo canal que <see cref="PlatformConfigInvalidationSubscriber"/> assina — sem isso, o
+    /// próprio processo que acabou de escrever continuaria servindo o modo antigo da cache local
+    /// pelos próximos <see cref="CacheDuration"/>.
+    /// </summary>
+    public async Task SetModeAsync(PlatformMode mode, CancellationToken cancellationToken)
+    {
+        var database = connectionMultiplexer.GetDatabase();
+        await database.StringSetAsync(KeyPrefix + ModeKey, mode.ToString());
+
+        var subscriber = connectionMultiplexer.GetSubscriber();
+        await subscriber.PublishAsync(RedisChannel.Literal(PlatformConfigInvalidationSubscriber.InvalidationChannel), ModeKey);
+    }
+
     private void Store<T>(string cacheKey, T value)
     {
         using var entry = cache.CreateEntry(cacheKey);

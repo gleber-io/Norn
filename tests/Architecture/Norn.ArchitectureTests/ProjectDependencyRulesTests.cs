@@ -9,11 +9,11 @@ namespace Norn.ArchitectureTests;
 
 /// <summary>
 /// Regras de dependência entre projetos (§4). Shop.Contracts → Norn.Contracts (Fase 1),
-/// Norn.Platform.* → BuildingBlocks.Chaos (ADR-13) e Norn.Monitor/Norn.Analyzer/Norn.Planner →
-/// Norn.Knowledge (ADR-17, os três lados existem desde a Fase 8) já são cobertos por assembly
-/// real. As demais proibições — Norn.Worker → Norn.API, Executor → Norn.Knowledge — entram quando
-/// os projetos dos dois lados existirem (Fases 9 e 10): uma regra sem assembly do lado proibido
-/// passa em verde sobre um conjunto vazio, para sempre.
+/// Norn.Platform.* → BuildingBlocks.Chaos (ADR-13) e Norn.Monitor/Norn.Analyzer/Norn.Planner/
+/// Norn.Executor → Norn.Knowledge (ADR-17, os quatro lados existem desde a Fase 9) já são cobertos
+/// por assembly real. A proibição restante — Norn.Worker → Norn.API — entra quando o projeto do
+/// outro lado existir (Fase 10): uma regra sem assembly do lado proibido passa em verde sobre um
+/// conjunto vazio, para sempre.
 /// </summary>
 public sealed class ProjectDependencyRulesTests
 {
@@ -22,6 +22,7 @@ public sealed class ProjectDependencyRulesTests
     private static readonly Assembly NornMonitorAssembly = typeof(Norn.Monitor.MonitorOptions).Assembly;
     private static readonly Assembly NornAnalyzerAssembly = typeof(Norn.Analyzer.Detection.MetricDetectorEngine).Assembly;
     private static readonly Assembly NornPlannerAssembly = typeof(Norn.Planner.Settings.PlannerOptions).Assembly;
+    private static readonly Assembly NornExecutorAssembly = typeof(Norn.Executor.Settings.ExecutorOptions).Assembly;
     private static readonly Assembly NornKnowledgeAssembly = typeof(Norn.Knowledge.KnowledgeDbContext).Assembly;
 
     public static TheoryData<Assembly> PlatformAssemblies => new()
@@ -30,7 +31,24 @@ public sealed class ProjectDependencyRulesTests
         NornMonitorAssembly,
         NornAnalyzerAssembly,
         NornPlannerAssembly,
+        NornExecutorAssembly,
     };
+
+    /// <summary>
+    /// Isolamento entre pares (Fase 9): Monitor/Analyzer/Planner/Executor falam só com portas de
+    /// Norn.Contracts, nunca entre si — só o Worker/API compõem. Sem isto, "muda-se num lugar só"
+    /// (§5.4) viraria dois projetos acoplados por engano.
+    /// </summary>
+    [Fact]
+    public void NornExecutor_Should_NotDependOn_SiblingPlatformProjects()
+    {
+        var result = Types.InAssembly(NornExecutorAssembly)
+            .Should()
+            .NotHaveDependencyOnAny("Norn.Monitor", "Norn.Analyzer", "Norn.Planner")
+            .GetResult();
+
+        result.IsSuccessful.ShouldBeTrue(string.Join(", ", result.FailingTypeNames ?? []));
+    }
 
     [Fact]
     public void ShopContracts_Should_NotDependOn_PlatformContracts()

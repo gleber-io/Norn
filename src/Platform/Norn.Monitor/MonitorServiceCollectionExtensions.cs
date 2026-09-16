@@ -29,6 +29,9 @@ public static class MonitorServiceCollectionExtensions
 
         services.AddSingleton<IMetricSampleBuffer, MetricSampleBuffer>();
         services.AddSingleton<RecentMetricsReader>();
+        // Fase 9: Norn.Executor consome a leitura pela porta, não pela classe concreta (ADR-17) —
+        // mesma instância, registro adicional só para satisfazer o tipo da porta.
+        services.AddSingleton<IRecentMetricsReader>(provider => provider.GetRequiredService<RecentMetricsReader>());
         services.AddHostedService<MonitorPollingBackgroundService>();
 
         return services;

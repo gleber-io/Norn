@@ -26,4 +26,11 @@ public interface IPlatformConfig
     Task<PlatformMode> GetModeAsync(CancellationToken cancellationToken);
 
     Task<ForecastConfig> GetForecastConfigAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Escrita do modo (Fase 10, <c>PUT /api/v1/mode</c>; Fase 9, circuit breaker do ADR-04,
+    /// barreira c — transição automática para <see cref="PlatformMode.Observe"/> após falhas
+    /// consecutivas). Implementada por Norn.Knowledge (Fase 9).
+    /// </summary>
+    Task SetModeAsync(PlatformMode mode, CancellationToken cancellationToken);
 }

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- ADR-17: adaptador — aplica ação no cluster (KubernetesClient, verbos de escrita do ADR-03:
+       patch em deployments/scale, delete em pods) e no catálogo de flags do Shop (IFeatureFlagWriter,
+       porta de Norn.Contracts). Fala só com portas de Norn.Contracts; nunca referencia
+       Norn.Knowledge nem os demais projetos de Platform/ (Monitor, Analyzer, Planner) — mesmo
+       isolamento entre pares que eles já guardam entre si. Biblioteca (Microsoft.NET.Sdk): expõe
+       AddNornExecutor(...), composta pelo Norn.Worker. -->
+  <ItemGroup>
+    <PackageReference Include="KubernetesClient" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Norn.Contracts\Norn.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

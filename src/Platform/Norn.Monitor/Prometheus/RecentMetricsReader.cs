@@ -11,7 +11,7 @@ namespace Norn.Monitor.Prometheus;
 /// <see cref="IMetricSource.QueryInstantAsync"/> (retorna uma única amostra) — por isso usa
 /// <c>QueryRangeAsync</c> numa janela mínima e agrupa por rótulo.
 /// </summary>
-public sealed class RecentMetricsReader(IMetricSource metricSource, IOptions<MonitorOptions> options)
+public sealed class RecentMetricsReader(IMetricSource metricSource, IOptions<MonitorOptions> options) : IRecentMetricsReader
 {
     public async Task<RecentMetrics> ReadAsync(string service, CancellationToken cancellationToken)
     {

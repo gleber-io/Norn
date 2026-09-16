@@ -157,6 +157,103 @@ depois que a infra volta (Postgres/Redis não estavam de pé quando eles tentara
 vez) — não há permissão configurada para `kubectl delete pod`, então é esperar o backoff (até ~5
 min) ou pedir para o usuário forçar.
 
+**Fase 9 — Executor, código completo e testado; validação ao vivo ainda pendente.** `Norn.Executor`
+criado (`ExecutionPreconditionChecker` — reavalia pré-condições e barreiras do ADR-04 ao vivo,
+lendo `ITopologyReader`/`ICooldownStore` no instante da atuação, nunca sobre o `AnomalyContext`
+congelado da decisão; `KubernetesActionApplier` — `ScaleUp` via `PatchNamespacedDeploymentScaleAsync`
+no subrecurso `scale`, `RestartPod` via `DeleteNamespacedPodAsync`, distinguindo 403 (`RbacDefect`)
+de qualquer outra falha; `FeatureFlagActionApplier` — `ToggleFeatureFlag` via `IFeatureFlagWriter`
+novo; `StartupCapabilityVerifier` — `SelfSubjectAccessReview` para `ScaleUp`/`RestartPod` e
+PING+EXISTS no Redis para o catálogo de flags, falha rápido no startup do Worker; `CircuitBreakerState`
+— contador em memória, ADR-04 barreira (c), abre e força `Observe` após 5 falhas consecutivas de
+aplicação, zerando o próprio contador ao abrir; `HealingActionExecutor` — orquestra tudo, produz
+`HealingOutcome`, distingue `ScaleUp` saturado (aceita e satura em `maxReplicas`, nunca recusa) de
+recusa por pré-condição). `Norn.Contracts` ganhou `IFeatureFlagWriter`, `IRecentMetricsReader`
+(extraído de `Norn.Monitor.Prometheus.RecentMetricsReader` para o Executor reusar a mesma leitura
+de métricas recentes sem duplicar as seis consultas PromQL) e dois métodos novos em `IPlatformConfig`/
+`ICooldownStore` (`SetModeAsync`, `RecordActionAsync`/`CountRecentActionsAsync` — janela deslizante
+via sorted set do Redis para a barreira (b) do ADR-04). `Norn.Worker` agora compõe também
+`Norn.Planner` e `Norn.Executor` (nenhum dos dois estava ligado ao loop antes desta fase);
+planejamento e atuação rodam **destacados** do laço de polling de 5s (`_ = Task.Run(...)` com escopo
+de DI próprio para o `IKnowledgeStore` — o campo do construtor é captive dependency do singleton
+`AnomalyPipelineBackgroundService`, e usá-lo dentro de uma tarefa destacada concorrente com o
+próximo tick violaria a garantia de uso não concorrente do `DbContext`). Decisão de design registrada
+em código: `ExecutorOptions` lê `MaxReplicas`/`RestartPodCooldown`/`MaxActionsPerWindow`/`ActionWindow`
+da mesma seção `Norn:Planner` que `PlannerOptions`, e `ServiceToDeploymentName` da mesma seção
+`Norn:Monitor` — o §5.4 exige que essas barreiras "mudem-se num lugar só", e os dois projetos
+continuam isolados entre si (nenhuma referência de projeto Executor→Planner/Monitor/Analyzer, coberto
+por `Norn.ArchitectureTests`). 354 testes verdes na solução (25 novos do Executor — `IKubernetes`
+dublado via NSubstitute, inclusive o detalhe de que as convenientes `*Async` do cliente k8s são
+extension methods sobre as `*WithHttpMessagesAsync`, e só estas últimas são dubláveis).
+
+**Revisão do `code-reviewer` antes do commit encontrou dois bloqueantes reais, corrigidos na hora:**
+(1) nada serializava execuções concorrentes de `PlanExecuteAndPersistAsync` para o mesmo alvo — a
+janela de correlação (~60s) podia fechar de novo para o mesmo serviço antes do disparo anterior
+terminar (cooldown só é gravado *depois* de aplicar), permitindo em tese duas ações sobre o mesmo
+alvo ao mesmo tempo, o próprio loop patológico que o ADR-04 existe para conter. Corrigido com
+`AnomalyPipelineBackgroundService.targetsInFlight` (`ConcurrentDictionary<string, Task>`,
+reservado por `TryAdd` antes de despachar). (2) as tasks destacadas não eram rastreadas nem
+aguardadas no encerramento — um shutdown no meio da janela de verificação (até 120s) perderia o
+`HealingOutcome` mesmo com a ação já aplicada de verdade no cluster. Corrigido com
+`StopAsync` drenando `targetsInFlight.Values`. Um terceiro achado, não bloqueante (corrida benigna
+em `CircuitBreakerState.RecordFailure` podendo dobrar a contagem de "circuito abriu" sob falhas
+concorrentes), também foi corrigido, trocando `Increment`+comparação por um laço de CAS — com teste
+de estresse sob concorrência real cobrindo o caso. 355 testes verdes após as correções.
+
+**Replay ao vivo contra o cluster k3d, o Postgres/Redis/Prometheus da Fase 6 e o `norn-qwen` real —
+concluído em sessão de acompanhamento.** Achado de ambiente resolvido primeiro: `host.k3d.internal`
+não resolvia de dentro do cluster (os três pods do Shop em `CrashLoopBackOff` por não alcançar
+Redis/Postgres) — o `bootstrap.ps1` já documentava esse cenário exato (Docker Desktop sobrevive a
+restart, CoreDNS perde a injeção); `k3d cluster stop`/`start` reinjetou o registro e os três pods
+recuperaram sozinhos.
+
+1. **`StartupCapabilityVerifier` contra a `Role` real, não um dublê.** Harness descartável tomando
+um token de `kubectl create token norn-executor -n norn-shop` (não o kubeconfig de admin, que
+mascararia qualquer restrição) confirmou os dois casos: no namespace `norn-shop` passa (`patch
+deployments/scale` e `delete pods` permitidos pela `Role` real); apontado para `norn-platform` —
+onde a `Role` não existe — falha exatamente como projetado, com as duas pré-condições nomeadas na
+mensagem. A checagem não é um carimbo de borracha.
+2. **`Norn.Worker` completo (Monitor+Analyzer+Planner+Executor+Knowledge) rodado ao vivo por ~10 min**,
+`dotnet run` local, migrations reais, `StartupCapabilityVerifier` real (kubeconfig de admin — só a
+verificação 1 acima prova a Role restrita), polling real do Prometheus. Modo `Active` forçado via
+Redis e F1 disparado via `/admin/chaos/activate` no Catalog real: o laço completo rodou ao vivo —
+sinal detectado (RSS, severidade `Medium`), `AnomalyContext` persistido (4 sinais correlacionados),
+`HealingPlan` decidido pelo **LLM real** (`DecidedBy: Llm`, chamada ao `norn-qwen` funcionando ponta
+a ponta pela primeira vez dentro do loop do Worker, não isolada como na Fase 8), `HealingOutcome`
+persistido no Postgres (`Status: Succeeded`) — confirmado por consulta direta às tabelas
+`healing_plans`/`healing_outcomes`. Repetiu para um segundo alvo (`Order.API`, sinal de latência)
+sem intervenção — não foi um evento isolado.
+3. **DoD "F1 → RestartPod com SLO restaurado" não foi alcançado nesta rodada — por dois motivos
+distintos, um de timing e um bug real:**
+   - **Timing:** sob o limite de 256Mi do manifesto (Fase 6) e a rampa do F1 (`tau=90s`), o
+     `OOMKilled` nativo do kubelet chegou em ~35s da ativação — mais rápido que a janela de
+     correlação de 60s (`AnalyzerOptions.CorrelationWindow`, Fase 7) consegue fechar. O laço
+     reativo do Norn nunca teve chance de agir antes de o próprio Kubernetes já ter reiniciado o
+     pod. Isto é característica de calibração das Fases 4–6, não defeito do Executor.
+   - **Bug real, fora do escopo da Fase 9, achado só no replay:** `PrometheusMetricSource.ToServiceTarget`
+     (`Norn.Monitor`, Fase 7) cai em `labels["exported_instance"]` — um UUID de instância OTel,
+     nunca um nome de pod Kubernetes — porque o rótulo `pod` nativo não chega às métricas: elas
+     saem do processo via OTLP para o Collector e voltam como Prometheus sem enriquecimento
+     `k8sattributes`, então nunca carregam `pod`/`namespace` de verdade. Resultado: todo
+     `AnomalyContext` construído ao vivo tem `PrimarySignal.Target.PodUid = null` e `Target.Pod` =
+     um UUID sem sentido para o cluster. A confirmação veio do `rationale` do LLM, gravado no
+     Postgres: *"falta UID para RestartPod"* — o Planner e o Executor recusaram corretamente agir
+     sem UID confiável (o design de segurança funcionou como projetado), mas isso significa que
+     **`RestartPod` está estruturalmente inalcançável pelo laço ao vivo hoje**, em qualquer modo,
+     até esse gap ser fechado — provavelmente enriquecendo o OTel Collector com `k8sattributes`
+     (Fase 4/6) ou resolvendo o pod atual via `ITopologyReader` no momento de montar o contexto
+     (Fase 7). Não corrigido nesta sessão — cruza a fronteira de uma fase já fechada e merece
+     decisão própria, não um patch improvisado em cima da validação da Fase 9.
+
+**Tarefa 8 (manifestos K8s do Norn em `norn-platform`) continua não feita** — mesmo motivo de antes:
+o Worker roda no host via kubeconfig, não como Pod, e não há Dockerfile nem passo de build/push no
+`bootstrap.ps1`. O `ServiceAccount norn-executor` permanece dormente (não é o que autentica o
+Worker hoje) mas sua `Role` real já foi validada diretamente (achado 1 acima).
+
+**Estado da infraestrutura ao fim da sessão:** modo da plataforma revertido para `Observe` (padrão
+seguro, ADR-05), caos F1 desativado, `Norn.Worker` local encerrado, os três pods do Shop
+`Running 1/1` — cluster deixado limpo para a próxima sessão.
+
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
 ADRs → docs/adr/

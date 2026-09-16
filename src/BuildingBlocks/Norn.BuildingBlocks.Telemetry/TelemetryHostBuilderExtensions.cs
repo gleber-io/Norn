@@ -56,6 +56,10 @@ public static class TelemetryHostBuilderExtensions
                 .AddMeter("Norn.BuildingBlocks.Chaos")
                 // norn_platform_signals_total, norn_platform_detection_latency_seconds (tarefa 8 da Fase 7).
                 .AddMeter("Norn.Analyzer")
+                // norn_platform_planning_latency_seconds, norn_platform_fallback_total (tarefa 8 da Fase 8).
+                .AddMeter("Norn.Planner")
+                // norn_platform_actions_total, norn_platform_mttr_seconds, norn_platform_mode (tarefa 9 da Fase 9).
+                .AddMeter("Norn.Executor")
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .SetExemplarFilter(ExemplarFilterType.TraceBased)

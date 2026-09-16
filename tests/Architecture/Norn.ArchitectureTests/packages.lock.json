@@ -602,6 +602,15 @@
       "norn.contracts": {
         "type": "Project"
       },
+      "norn.executor": {
+        "type": "Project",
+        "dependencies": {
+          "KubernetesClient": "[19.0.2, )",
+          "Microsoft.Extensions.Hosting.Abstractions": "[10.0.12, )",
+          "Microsoft.Extensions.Options.ConfigurationExtensions": "[10.0.12, )",
+          "Norn.Contracts": "[1.0.0, )"
+        }
+      },
       "norn.knowledge": {
         "type": "Project",
         "dependencies": {
