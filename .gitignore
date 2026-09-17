@@ -13,6 +13,11 @@ node_modules/
 dist/
 .vite/
 
+# Fase 11 — dist/ do dashboard copiado manualmente pra cá em validação local (residual: o
+# empacotamento automático pelo bootstrap.ps1 não está implementado ainda, ver CLAUDE.md).
+src/Platform/Norn.API/wwwroot/*
+!src/Platform/Norn.API/wwwroot/.gitkeep
+
 # Python
 tools/analysis/.venv/
 tools/analysis/__pycache__/

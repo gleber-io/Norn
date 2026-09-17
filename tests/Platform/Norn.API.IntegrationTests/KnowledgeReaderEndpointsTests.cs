@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Norn.Contracts;
@@ -16,7 +17,12 @@ namespace Norn.API.IntegrationTests;
 [Collection(nameof(NornApiCollectionDefinition))]
 public sealed class KnowledgeReaderEndpointsTests(NornApiFactory factory)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    // Enum vai como string no wire desde a correção de Fase 11 (unifica com o canal SignalR) —
+    // o converter aqui espelha o que Norn.API.Program registra em ConfigureHttpJsonOptions.
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     [Fact]
     public async Task GetTopology_AfterContextPersisted_ReturnsLatestTopologyForService()

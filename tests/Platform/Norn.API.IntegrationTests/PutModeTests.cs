@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Norn.API.Features.GetMode;
 using Norn.API.Features.SetMode;
 using Norn.Contracts.Ports;
@@ -19,7 +20,12 @@ namespace Norn.API.IntegrationTests;
 [Collection(nameof(NornApiCollectionDefinition))]
 public sealed class PutModeTests(NornApiFactory factory)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    // Enum vai como string no wire desde a correção de Fase 11 — espelha ConfigureHttpJsonOptions
+    // de Norn.API.Program, tanto pro corpo do PUT quanto pra leitura da resposta do GET.
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     [Fact]
     public async Task PutMode_ChangesMode_ReflectedByGetMode()
