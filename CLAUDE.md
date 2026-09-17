@@ -79,10 +79,13 @@ Decisão tomada: avançar para a Fase 10 em vez de fechar os residuais de F1/Dry
 fechado (bug real da query do Prometheus corrigido e provado ao vivo; o que sobra é calibração de
 janela/limiar, não bug — ver detalhe). Circuit breaker avançou (achou e corrigiu o Worker local
 usando kubeconfig de admin em vez do token da `norn-executor`; `StartupCapabilityVerifier` provado
-recusando o boot de verdade nas duas permissões) mas não fechou as 5 falhas consecutivas — travou
-num obstáculo do ambiente (severidade habituada após 8h de sessão + o próprio caos quebrando a
-telemetria do pod sob pressão sustentada), não do mecanismo. `DryRun` continua sem replay ao vivo.
-Nenhum dos três bloqueia a Fase 11. Próxima decisão: avançar para a Fase 11 (Dashboard React) ou
+recusando o boot de verdade nas duas permissões; um 403/`RbacDefect` real confirmado ao vivo) mas não
+fechou as 5 falhas consecutivas em nenhuma das duas tentativas — a causa real, mais precisa que "8h
+de sessão", é que testar exatamente esse cenário (`RestartPod` sempre falhando) impede o caos de
+ser aliviado, e o mesmo pod sob pressão contínua quebra a própria telemetria antes de acumular as
+5 falhas (confirmado em só ~15-20 min na segunda tentativa, com baseline limpo). `DryRun` continua
+sem replay ao vivo. Nenhum dos três bloqueia a Fase 11. Próxima decisão: avançar para a Fase 11
+(Dashboard React) ou
 retomar os dois itens que sobraram (calibração de F1, circuit breaker + DryRun) numa sessão nova,
 com o ambiente descansado.
 
@@ -457,6 +460,22 @@ restart limpo do pod resolveu (métricas voltaram a fluir imediatamente) — mas
 ("caos sustentado por muitas horas pode degradar o processo a ponto de quebrar a própria telemetria
 que o Norn depende pra reagir") é um achado que vale registrar para a Fase 12: uma campanha de
 verdade não deveria rodar caos ininterrupto por 8h sobre o mesmo pod sem intervenção.
+
+**Segunda tentativa, focada e com baseline limpo (mesma sessão, logo em seguida) — confirmou 1/5
+falhas reais e revelou uma causa mais precisa que "8h de sessão".** Com Catalog recém-reiniciado
+(baseline ~106Mi), Worker novo com o token da `norn-executor` e RBAC quebrado desde o boot, o
+primeiro `RestartPod` decidido pelo `RuleEngine` já bateu um 403 genuíno em poucos minutos —
+`HealingOutcome` com status `Rejected` (403/`RbacDefect` mapeia pra `Rejected` no outcome, não
+`Failed` — nomenclatura do §5.4, não confundir com o caminho de contagem do breaker, que trata os
+dois igual). Só que, **porque o `RestartPod` ficava bloqueado, o caos nunca era aliviado** — o mesmo
+pod absorveu pressão continuamente, sem o ciclo de restart que normalmente interromperia o efeito —
+e a exportação de métricas quebrou de novo, desta vez em só ~15-20 min, não horas. Isso aponta a
+causa real com mais precisão: não é "sessão longa" em geral, é **caos sustentado sem alívio**
+especificamente — e testar "5 `RestartPod` falhando em sequência" cria exatamente essa condição por
+construção (a cura nunca acontece, de propósito), o que torna esse cenário particular
+estruturalmente propenso a esbarrar nesse limite de telemetria antes de acumular as 5 falhas neste
+ambiente. Não tentado: um alvo diferente a cada falha (rotacionar entre serviços) evitaria a pressão
+contínua sobre o mesmo pod, mas não foi experimentado por falta de tempo nesta sessão.
 
 **`DryRun` — não validado ao vivo nesta sessão** (a garantia estrutural — nunca aplica de verdade,
 nunca grava cooldown/Redis, retorna antes da janela de verificação — já é coberta por teste unitário
