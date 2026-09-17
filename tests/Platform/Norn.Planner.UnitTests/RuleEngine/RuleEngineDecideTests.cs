@@ -33,6 +33,7 @@ public sealed class RuleEngineDecideTests
         plan.DecidedBy.ShouldBe(DecidedBy.RuleEngine);
         plan.Actions.ShouldHaveSingleItem();
         plan.Actions[0].Type.ShouldBe(HealingActionType.RestartPod);
+        plan.VerificationWindowSeconds.ShouldBe(new PlannerOptions().RestartPodVerificationWindowSeconds);
     }
 
     [Fact]
@@ -44,6 +45,7 @@ public sealed class RuleEngineDecideTests
 
         plan.Actions.ShouldHaveSingleItem();
         plan.Actions[0].Type.ShouldBe(HealingActionType.NoOp);
+        plan.VerificationWindowSeconds.ShouldBe(new PlannerOptions().VerificationWindowSeconds);
     }
 
     [Fact]

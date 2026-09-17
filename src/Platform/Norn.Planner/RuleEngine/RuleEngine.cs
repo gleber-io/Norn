@@ -113,7 +113,7 @@ public sealed class RuleEngine(
             ExpectedOutcome = accepted
                 ? $"SLO restaurado após {finalAction.Type} sobre {finalAction.Target.Service}."
                 : "Nenhuma ação segura disponível — sistema permanece no estado atual.",
-            VerificationWindowSeconds = options.VerificationWindowSeconds,
+            VerificationWindowSeconds = options.VerificationWindowSecondsFor(finalAction.Type),
             LlmTrace = new LlmTrace(),
         };
     }

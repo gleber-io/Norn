@@ -75,19 +75,17 @@ unitário). Tarefa 8 (manifestos K8s) feita, não ligada ao `bootstrap.ps1`. Det
 Decisão tomada: avançar para a Fase 10 em vez de fechar os residuais de F1/DryRun/breaker.
 **Fase 10 (Norn.API) concluída e fechada — DoD integral validado ao vivo, ver detalhe abaixo.**
 
-**Residuais da Fase 9 — sessão de fechamento em 17/09/2026, dois de três fechados:** F1/`RestartPod`
-fechado (bug real da query do Prometheus corrigido e provado ao vivo; o que sobra é calibração de
-janela/limiar, não bug — ver detalhe). Circuit breaker avançou (achou e corrigiu o Worker local
-usando kubeconfig de admin em vez do token da `norn-executor`; `StartupCapabilityVerifier` provado
-recusando o boot de verdade nas duas permissões; um 403/`RbacDefect` real confirmado ao vivo) mas não
-fechou as 5 falhas consecutivas em nenhuma das duas tentativas — a causa real, mais precisa que "8h
-de sessão", é que testar exatamente esse cenário (`RestartPod` sempre falhando) impede o caos de
-ser aliviado, e o mesmo pod sob pressão contínua quebra a própria telemetria antes de acumular as
-5 falhas (confirmado em só ~15-20 min na segunda tentativa, com baseline limpo). `DryRun` continua
-sem replay ao vivo. Nenhum dos três bloqueia a Fase 11. Próxima decisão: avançar para a Fase 11
-(Dashboard React) ou
-retomar os dois itens que sobraram (calibração de F1, circuit breaker + DryRun) numa sessão nova,
-com o ambiente descansado.
+**Residuais da Fase 9 — dois de três fechados (17/09/2026).** F1/`RestartPod` fechado por completo,
+incluindo a calibração de janela (`RestartPodVerificationWindowSeconds`, 240s, por tipo de ação —
+ver detalhe). `DryRun` fechado, validado ao vivo (mensagem, timestamps, métricas e UID do pod
+provando que nada real foi tocado). Circuit breaker segue em aberto — três tentativas ao vivo
+avançaram bastante (RBAC provada recusando boot de verdade, um 403/`RbacDefect` real confirmado,
+um método novo de injeção de falha via ACL do Redis que isola só o `ToggleFeatureFlag` sem quebrar
+telemetria) mas nenhuma fechou as 5 falhas consecutivas — a causa mais precisa encontrada é que
+`CircuitBreakerState` é um contador global único, e qualquer sucesso real concorrente em outro
+serviço/ação reseta a sequência antes de chegar a 5. Fechar de verdade exige suprimir toda ação
+concorrente bem-sucedida durante o teste (RBAC quebrada de verdade + bloqueio de Redis ao mesmo
+tempo) — desenho deliberado para uma sessão com fôlego, não bloqueia a Fase 11.
 
 Cluster k3d validado de ponta a ponta (Fase 6): `bootstrap.ps1` leva de zero a sistema funcional em um comando, fluxo completo de pedido roda dentro do cluster, RBAC do ADR-03 confirmado (positivo e negativo), `maxReplicas=3` valida escala real, Traefik ausente (D9), `container_memory_working_set_bytes`/`container_cpu_usage_seconds_total` via cAdvisor fecham o DoD da Fase 4.
 
@@ -537,6 +535,44 @@ Validada com `ACL DRYRUN` antes de rodar o Worker de verdade — confirma isolam
 **Ambiente ao fim desta tentativa:** F3 desativado, ACL do Redis restaurada ao padrão (`default on
 nopass ~* &* +@all`), modo `Observe`, `shop:flags:payment.gateway.bypass = false`, Catalog e Order
 de volta a 1 réplica cada, `Worker`/`Norn.LoadGenerator`/`port-forward` locais encerrados.
+
+**Dois dos três residuais fechados numa sessão seguinte — calibração do F1 (código) e `DryRun`
+(replay ao vivo). Circuit breaker continua em aberto, por decisão (precisa do desenho combinado
+descrito acima, não tentado de novo aqui).**
+
+**F1 — calibração da janela de verificação, fechada.** `PlannerOptions` ganhou
+`RestartPodVerificationWindowSeconds` (240s, default em código e em `appsettings.json`, ao lado do
+`VerificationWindowSeconds` genérico de 120s) e um método `VerificationWindowSecondsFor(HealingActionType)`
+— fonte única que `RuleEngine.Decide` e `LlmPlanner.DecideAsync` passaram a chamar em vez de ler o
+campo genérico direto, para os dois braços nunca divergirem no critério (mesmo cuidado que já existe
+para outras barreiras do ADR-04). `RestartPod` é a única ação com janela dedicada — é a única cujo
+próprio efeito colateral (processo novo, overhead de startup/JIT/GC) atrapalha a própria verificação;
+as outras três do catálogo fechado continuam na janela genérica. 6 testes novos (`PlannerOptionsTests`
+direto sobre a função pura + dois testes existentes de `RuleEngineDecideTests` estendidos com a
+asserção do campo) — 184 testes verdes em `Norn.Planner.UnitTests`. `code-reviewer` sem achados
+bloqueantes; confirmou que o valor calculado chega mesmo ao `Task.Delay` do Executor (não é cosmético)
+e que `RuleEngine.DecideActionType` (a função pura de verdade, M=7) não foi tocada — só a casca
+`Decide`, que já não era pura (usa `TimeProvider`). O número (240s) é uma estimativa informada pelo
+achado do replay anterior (overhead de startup de um pod .NET), não uma medição de campanha — pode
+precisar de ajuste fino quando houver dado real (Fase 12).
+
+**`DryRun` — validado ao vivo, DoD fechado.** Worker rodado com baseline limpa do Catalog (~140Mi,
+pod recém-reiniciado), modo `DryRun` desde o boot, F1 ativado depois do warmup. Duas decisões reais
+de `RestartPod` (`RuleEngine`) confirmaram as quatro garantias ao mesmo tempo: (1) mensagem
+`"[DryRun] RestartPod não aplicado — apenas simulado (tarefa 4)."` gravada no outcome; (2)
+`appliedAtUtc == verifiedAtUtc` ao microssegundo — confirma que a janela de verificação (120s/240s)
+foi pulada de verdade, não só encurtada; (3) `metricsBefore == metricsAfter` idênticos — nenhuma
+segunda leitura de métricas foi feita; (4) o UID do pod do Catalog antes e depois do teste foi o
+mesmo (`kubectl get pod`), e nenhuma chave `norn:platform:cooldown:*` apareceu no Redis — o
+`DeleteNamespacedPodAsync` nunca foi chamado de verdade. Achado colateral, não um problema: como o
+`DryRun` nunca interrompe o caos de verdade, o F1 seguiu crescendo a memória do Catalog sem
+oposição até o kubelet aplicar um `OOMKilled` real por conta própria ao fim do teste — o pod se
+recuperou sozinho (`1/1 Running` com memória baixa), esperado e consistente com o próprio propósito
+do `DryRun` (observar sem agir).
+
+**Ambiente ao fim desta sessão:** F1 desativado, modo `Observe`, Catalog saudável após o `OOMKilled`
+natural do fim do teste (memória baixa, réplica única), Order/Payment não tocados nesta sessão,
+`Worker` local encerrado.
 
 **Fase 10 — Norn.API (BFF + SignalR), concluída: implementada, testada e validada ao vivo de ponta
 a ponta (Worker + API como processos separados, DoD integral fechado).** `Norn.API` criado do zero

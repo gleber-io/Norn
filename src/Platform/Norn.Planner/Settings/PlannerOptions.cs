@@ -1,3 +1,5 @@
+using Norn.Contracts;
+
 namespace Norn.Planner.Settings;
 
 /// <summary>
@@ -40,4 +42,17 @@ public sealed class PlannerOptions
     public int NumCtx { get; init; } = 8192;
 
     public int VerificationWindowSeconds { get; init; } = 120;
+
+    /// <summary>
+    /// Janela de verificação específica do <c>RestartPod</c> (Fase 9, residual de calibração) —
+    /// 120s genérico não bastava: overhead de startup/JIT/GC de um pod .NET recém-criado empurra
+    /// o RSS pra cima por um tempo mesmo sem vazamento nenhum rolando (achado do replay ao vivo,
+    /// <c>PartiallyApplied</c> com o `RestartPod` já correto). É a única ação cujo próprio efeito
+    /// colateral (processo novo) atrapalha a própria verificação — as demais não pagam esse custo.
+    /// </summary>
+    public int RestartPodVerificationWindowSeconds { get; init; } = 240;
+
+    /// <summary>Fonte única da janela por tipo de ação — os dois braços (RuleEngine, LlmPlanner) chamam este método, nunca leem os campos acima diretamente.</summary>
+    public int VerificationWindowSecondsFor(HealingActionType actionType) =>
+        actionType == HealingActionType.RestartPod ? RestartPodVerificationWindowSeconds : VerificationWindowSeconds;
 }

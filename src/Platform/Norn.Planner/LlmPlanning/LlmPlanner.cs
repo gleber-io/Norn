@@ -78,7 +78,8 @@ public sealed partial class LlmPlanner(
             Confidence = plan.Confidence,
             Actions = plan.Actions,
             ExpectedOutcome = plan.ExpectedOutcome,
-            VerificationWindowSeconds = options.VerificationWindowSeconds,
+            VerificationWindowSeconds = options.VerificationWindowSecondsFor(
+                plan.Actions.Count > 0 ? plan.Actions[0].Type : HealingActionType.NoOp),
             LlmTrace = new LlmTrace
             {
                 PromptHash = builtPrompt.PromptHash,
