@@ -66,8 +66,8 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 Minimal API, Clean Architecture por pasta, vertical slice dentro de `Features/`, TypedResults, LoggerMessage, naming de testes `MethodName_Scenario_ExpectedBehavior`.
 
 ## Estado atual
-Fase 8 concluída. **Fase 9 (Executor) implementada, commitada e majoritariamente validada ao
-vivo — não fechada pelo padrão rigoroso de DoD integral.** F2 e F3 fecharam o DoD ao vivo
+Fase 8 concluída. **Fase 9 (Executor) implementada, commitada e — após os residuais fecharem numa
+sessão de acompanhamento — com DoD integral completo.** F2 e F3 fecharam o DoD ao vivo
 (`ScaleUp`/`ToggleFeatureFlag`, `SloRestored=true`, evidência no Postgres); F1 (`RestartPod`)
 dispara de verdade com UID correto mas fica `PartiallyApplied` (janela de verificação curta
 demais); `DryRun` e o circuit breaker não foram exercitados em replay ao vivo completo (só teste
@@ -75,17 +75,15 @@ unitário). Tarefa 8 (manifestos K8s) feita, não ligada ao `bootstrap.ps1`. Det
 Decisão tomada: avançar para a Fase 10 em vez de fechar os residuais de F1/DryRun/breaker.
 **Fase 10 (Norn.API) concluída e fechada — DoD integral validado ao vivo, ver detalhe abaixo.**
 
-**Residuais da Fase 9 — dois de três fechados (17/09/2026).** F1/`RestartPod` fechado por completo,
+**Residuais da Fase 9 — os três fechados (17/09/2026).** F1/`RestartPod` fechado por completo,
 incluindo a calibração de janela (`RestartPodVerificationWindowSeconds`, 240s, por tipo de ação —
 ver detalhe). `DryRun` fechado, validado ao vivo (mensagem, timestamps, métricas e UID do pod
-provando que nada real foi tocado). Circuit breaker segue em aberto — três tentativas ao vivo
-avançaram bastante (RBAC provada recusando boot de verdade, um 403/`RbacDefect` real confirmado,
-um método novo de injeção de falha via ACL do Redis que isola só o `ToggleFeatureFlag` sem quebrar
-telemetria) mas nenhuma fechou as 5 falhas consecutivas — a causa mais precisa encontrada é que
-`CircuitBreakerState` é um contador global único, e qualquer sucesso real concorrente em outro
-serviço/ação reseta a sequência antes de chegar a 5. Fechar de verdade exige suprimir toda ação
-concorrente bem-sucedida durante o teste (RBAC quebrada de verdade + bloqueio de Redis ao mesmo
-tempo) — desenho deliberado para uma sessão com fôlego, não bloqueia a Fase 11.
+provando que nada real foi tocado). **Circuit breaker fechado, provado ao vivo**: RBAC quebrada de
+verdade (token real da `norn-executor`, não kubeconfig de admin) e `SET` negado em `shop:flags:*`
+no Redis ao mesmo tempo — com os dois caminhos de aplicação bloqueados, 5 falhas reais heterogêneas
+(`RestartPod`/Catalog x2, `ScaleUp`/Order x2, `ToggleFeatureFlag`/Payment x1) se acumularam sem
+nenhum reset, e a quinta disparou o log `"Circuit breaker aberto após 5 falhas consecutivas"` com
+`norn:platform:config:mode` virando `Observe` de verdade, sem intervenção manual — ver detalhe.
 
 Cluster k3d validado de ponta a ponta (Fase 6): `bootstrap.ps1` leva de zero a sistema funcional em um comando, fluxo completo de pedido roda dentro do cluster, RBAC do ADR-03 confirmado (positivo e negativo), `maxReplicas=3` valida escala real, Traefik ausente (D9), `container_memory_working_set_bytes`/`container_cpu_usage_seconds_total` via cAdvisor fecham o DoD da Fase 4.
 
@@ -573,6 +571,41 @@ do `DryRun` (observar sem agir).
 **Ambiente ao fim desta sessão:** F1 desativado, modo `Observe`, Catalog saudável após o `OOMKilled`
 natural do fim do teste (memória baixa, réplica única), Order/Payment não tocados nesta sessão,
 `Worker` local encerrado.
+
+**Circuit breaker — quarta tentativa, fechada de vez.** O desenho combinado descrito no fim da
+terceira tentativa funcionou de primeira: token real da `norn-executor` (`kubectl create token
+norn-executor -n norn-platform`) com kubeconfig escopado próprio (nunca o de admin — a armadilha já
+conhecida), Worker subido com RBAC intacta, boot confirmado, **depois** a `Role` reduzida a só
+`get/list/watch` (removendo `patch deployments/scale` e `delete pods`) — combinado com a mesma regra
+de ACL do Redis já validada na terceira tentativa (`SET` negado em `shop:flags:*`, reaberto para
+`norn:platform:config:*`/`norn:platform:cooldown:*`), desta vez com `ACL SETUSER default reset on
+nopass ...` — o `on` explícito evitou repetir o lockout de antes.
+
+Com os dois caminhos de aplicação bloqueados ao mesmo tempo, o achado da tentativa anterior (contador
+global, sucesso em qualquer alvo reseta tudo) deixou de ser um obstáculo — virou uma vantagem: **5
+falhas reais heterogêneas** se acumularam em ~30 min sem nenhum reset, confirmando que o disjuntor
+realmente não distingue tipo de ação nem alvo: `RestartPod`/Catalog (403 real, duas vezes),
+`ScaleUp`/Order (403 real, duas vezes) e `ToggleFeatureFlag`/Payment (Redis, uma vez) — a quinta
+falha (`ScaleUp`/Order) disparou o log `"Circuit breaker aberto após 5 falhas consecutivas (ADR-04,
+barreira c) — modo forçado para Observe."` e `norn:platform:config:mode` virou `Observe` de verdade,
+sem nenhuma intervenção manual. Nenhuma nova tentativa de ação apareceu depois disso — confirma que
+o modo forçado realmente impediu o Executor de agir de novo nos ciclos seguintes.
+
+**Achado extra, o mesmo padrão de habituação de sempre, desta vez entendido com mais precisão:** o
+Catalog sozinho não bastou (a baseline adaptativa do detector — por métrica, no processo do Worker,
+não por pod — não teve tempo de decair entre um `rollout restart` e o próximo, então uma memória que
+já tinha sido vista como "alta" antes voltava a parecer "normal" ao reassentar no mesmo patamar
+depois de um restart rápido). A saída foi trazer o F3 no Payment em paralelo — uma métrica
+completamente virgem nesta execução do Worker — em vez de insistir no Catalog já habituado; como
+`ToggleFeatureFlag` conta para o mesmo disjuntor global, isso deu um segundo fluxo independente de
+falhas sem precisar reiniciar o Worker (o que teria zerado o próprio contador do disjuntor junto).
+
+**Ambiente ao fim desta sessão:** F3 desativado, port-forward do Payment encerrado, ACL do Redis
+restaurada ao padrão de fábrica (com `on` desta vez), RBAC restaurada ao manifesto committado via
+`kubectl apply -f deploy/k8s/base/rbac-norn.yaml` (as quatro regras originais), modo `Observe`,
+`shop:flags:payment.gateway.bypass = false`, Catalog/Order/Payment em 1 réplica cada, `Worker`/
+`Norn.LoadGenerator` locais encerrados. Nenhum arquivo do repositório foi alterado nesta sessão — foi
+só operação ao vivo contra o cluster e o Redis.
 
 **Fase 10 — Norn.API (BFF + SignalR), concluída: implementada, testada e validada ao vivo de ponta
 a ponta (Worker + API como processos separados, DoD integral fechado).** `Norn.API` criado do zero
