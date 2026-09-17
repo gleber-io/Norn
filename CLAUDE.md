@@ -698,8 +698,117 @@ Ambiente revertido ao final: modo `Observe`, réplica do Catalog de volta a 1, c
 Worker/API/cliente SignalR locais encerrados, Redis e Postgres seguem de pé (reaproveitados de uma
 sessão anterior, não foram provisionados nesta).
 
+**Fase 11 — Dashboard React + Vite, concluída: implementada, testada e validada ao vivo de ponta a
+ponta contra a Norn.API real, servida pela própria API via `wwwroot` (DoD integral fechado).**
+`web/norn-dashboard/` criado do zero — Vite 8 + React 19.2 + TypeScript strict
+(`noUncheckedIndexedAccess`, `noImplicitOverride`) + Tailwind v4 CSS-first (`@tailwindcss/vite`,
+sem `tailwind.config.js`) + Biome (lint+formatação, a11y ativado, sem ESLint/Prettier) + React
+Router v8 declarative (`<BrowserRouter>`/`<Routes>`, nunca `createBrowserRouter`). Estrutura por
+feature (`src/features/{topology,mapek,plans,metrics,control}/`), nunca `src/components`
+monolítico.
+
+**Três ajustes na Norn.API (Fase 10, já fechada) antes do front, decisão consciente de tocar
+código de fase já encerrada:** (1) `JsonStringEnumConverter` global via `ConfigureHttpJsonOptions`
+— antes REST mandava enum como inteiro e o SignalR já mandava como string camelCase
+(`PlatformEventPublisher`), assimetria real que exigiria dois decoders de enum no front; unificado,
+um só formato em todo o app. (2) `UseStaticFiles()`+`MapFallbackToFile("index.html")` — o que
+permite a Norn.API servir o dashboard, mesma origem, sem CORS em runtime (CLAUDE.md). (3) Endpoint
+novo `GET /api/v1/metrics/series` (feature `metrics`, tarefa 8) — não existia nenhum recurso de
+série temporal na Fase 10. Implementação própria de `Norn.Contracts.Ports.IMetricSource` em
+`Norn.API/Infrastructure/Prometheus/`, **sem referenciar `Norn.Monitor`** (ADR-17) — duplica em
+menor escala o cliente HTTP cru que `Norn.Monitor.Prometheus.PrometheusMetricSource` já tem
+(mesmo parsing, mesma lógica de "amostra mais recente por timestamp"), decisão registrada em
+`docs/norn-api-contract.md` §5 e no código: extrair pra um `Norn.BuildingBlocks` compartilhado é a
+alternativa mais limpa, mas só vale a pena quando `QueryInstantAsync` (hoje só implementado pra
+satisfazer o contrato, não chamado pelo endpoint) tiver um segundo consumidor de verdade. Contrato
+completo (rotas, DTOs, enums, os seis eventos do hub) registrado em `docs/norn-api-contract.md` —
+referência pro front em vez de reconferir a API do zero a cada sessão.
+
+**Camada de dados do front é uma só fonte pra REST e SignalR.** `src/lib/api-client.ts` usa
+`openapi-fetch` contra os tipos gerados (`src/lib/api-types.ts`, `openapi-typescript` — script
+`generate:api`, roda contra a API local, **não roda no CI**, arquivo fica commitado como qualquer
+código gerado) mas faz toda resposta passar pelos mesmos schemas Zod que validam o payload do
+SignalR (`src/lib/schemas/`) antes de devolver ao chamador — normaliza os campos `number | string`
+que o OpenAPI gerado pelo .NET produz pra doubles/ints (NaN/Infinity de ponto flutuante) pra
+`number` de verdade, um só formato numérico no app inteiro. `src/lib/signalr.ts` (`useNornHub`)
+conecta em `/hubs/norn`, reidrata as cinco queries REST a cada conexão/reconexão (ADR-15) e aplica
+os seis eventos direto no cache do TanStack Query; a timeline MAPE-K usa um Zustand à parte só pro
+feed de apresentação (lane/summary/timestamp/correlationId — nunca o payload de domínio inteiro,
+achado do code-reviewer: guardar o payload lá era dado de servidor morto disfarçado de estado de
+UI, removido).
+
+**Bug real encontrado pelo `code-reviewer` antes do commit, corrigido:** as `queryKey` de
+`signals`/`plans`/`outcomes` no TanStack Query não levavam `limit` — duas telas com limites
+diferentes (lista com 100, detalhe com 200) disputavam a mesma entrada de cache, e qual limite
+"vencia" dependia da ordem de montagem dos componentes, não de quem estava lendo. Corrigido
+(`queryKeys` viram função do `limit`; `useNornHub` passou a invalidar/atualizar por prefixo de
+chave, ex. `["signals"]`, pra alcançar todas as variantes de limite ativas de uma vez), com teste
+de regressão dedicado.
+
+**Cinco features**: `topology` (grafo React Flow, saúde por serviço derivada cruzando o sinal mais
+recente que mira o serviço com o outcome mais recente de um plano cuja ação mira o mesmo serviço —
+`HealingOutcome` não carrega `ServiceTarget` direto, só via `HealingPlan.actions[].target`);
+`mapek` (timeline em 4 faixas Monitor/Analyze/Plan/Execute, vocabulário do MAPE-K sem sinônimo,
+`aria-live="polite"` pros eventos chegando ao vivo — item de acessibilidade que nenhum linter
+cobre, só Lighthouse + inspeção manual); `plans` (lista + detalhe com `rationale`, ações,
+`llmTrace`, diff `metricsBefore`/`metricsAfter`); `metrics` (série real da Norn.API via Recharts,
+com o instante do sinal/ação marcado no cliente — o endpoint devolve só a série, sem acoplar
+semântica de sinal/ação ao backend); `control` (seletor Observe/DryRun/Active, confirmação
+explícita via `window.confirm` só pra `Active` — `PUT /mode` nunca publica em `norn:events`,
+achado da Fase 10, então a UI não assume sucesso imediato, só reconcilia quando o `ModeChanged` ao
+vivo chegar ou a própria mutation resolver). 22 testes Vitest+RTL+MSW, nenhum bate na Norn.API
+real.
+
+**Replay ao vivo, sessão única, sem reload — DoD roteiro fechado com achados genuínos.** Worker e
+API rodados como processos `dotnet run` separados contra a infra real (Postgres/Redis/Prometheus/
+k3d de pé, reaproveitados). `npm run build` + cópia manual de `dist/` pra
+`src/Platform/Norn.API/wwwroot/` (automação fica no residual abaixo). Verificado por script
+Playwright (Chromium headless via `npx playwright install chromium` + pacote `playwright` num
+projeto descartável — não existe `chromium-cli` neste ambiente Windows) mantendo uma única sessão
+de página aberta por vários minutos, nunca recarregada:
+- Modo trocado pra `Active` via REST, refletido na UI (`ModeChanged` ao vivo).
+- F1 ativado no Catalog real (`/admin/chaos/activate`, via `kubectl port-forward`): nó foi de
+  saudável → degradado → crítico ao vivo, sinal apareceu na faixa Monitor, plano real
+  (`RestartPod`, decidido por `RuleEngine`) apareceu na faixa Plan, pod do Catalog **realmente**
+  recriado (confirmado via `kubectl get pods`, nome do pod mudou), outcome (`PartiallyApplied`,
+  `SloRestored=false`) apareceu na faixa Execute — tudo sem reload. Nó não voltou a verde nesta
+  execução porque o outcome saiu `PartiallyApplied`, não `Succeeded`: **não é bug do dashboard**,
+  é o mesmo achado de calibração do RestartPod já documentado nos residuais da Fase 9 (overhead de
+  startup/JIT/GC do pod novo pode não assentar dentro da janela de verificação). O mecanismo de
+  atualização ao vivo (a parte que a Fase 11 precisa provar) funcionou perfeitamente.
+- Derrubar a Norn.API (`taskkill` no processo real) fez o badge de conexão ir de `Conectado` →
+  `Reconectando…` em ~10s; religar a API fez voltar a `Conectado` sozinho em ~45s
+  (`withAutomaticReconnect`), **sem nenhuma ação manual na página**. Depois de reconectar, a
+  timeline mostrou eventos que aconteceram **durante** a queda (um segundo sinal Critical, um novo
+  contexto correlacionado, um segundo `RestartPod` decidido pelo `RuleEngine` e **rejeitado** por
+  cooldown — ADR-04 barreira funcionando, confirmado ao vivo de graça) — prova concreta de que a
+  reidratação REST ao reconectar fecha o buraco, não só a promessa de design.
+- Lighthouse (via `npx lighthouse` + Chromium do Playwright, `CHROME_PATH` explícito) rodou contra
+  a página real: 96/100 de acessibilidade na primeira passada, uma falha real —
+  `text-muted-foreground` (`oklch(0.556 0 0)`, #737373) sobre fundo `bg-muted` (#f5f5f5) dava
+  contraste 4.34:1, abaixo do 4.5:1 exigido pra texto normal (WCAG AA). Corrigido
+  (`oklch(0.45 0 0)`), 100/100 na segunda passada, zero violações.
+
+**Residual desta fase, documentado no README do pacote e aqui — mesma decisão já tomada pro
+`Norn.Worker` na Fase 9, pelo mesmo motivo.** Dockerfile da Norn.API, manifesto K8s
+(`norn-api.yaml`) e o wiring no `bootstrap.ps1` (`npm run build` → `generate:api` → `docker build`
+copiando `dist/` pra `wwwroot`) **não foram feitos** — Norn.API, como o Worker, roda via
+`dotnet run` local em toda validação ao vivo hoje, e ligar isso ao fluxo padrão de deploy é uma
+mudança de modelo operacional que o usuário não pediu. O DoD ("acessar pela URL da Norn.API") não
+exige container nem cluster — só que a API sirva o build, o que já está provado. Emissão de
+`openapi.json` em tempo de build via `Microsoft.Extensions.ApiDescription.Server` fica amarrada ao
+mesmo residual; por ora `npm run generate:api` aponta pra uma instância local em execução.
+
+**Ambiente ao fim desta sessão:** modo `Observe`, caos F1 desativado, `shop:flags:` zeradas,
+Catalog/Order/Payment em 1 réplica cada, Norn.API/Norn.Worker/`kubectl port-forward` locais
+encerrados. Redis/Postgres/Prometheus/k3d seguem de pé (reaproveitados de sessão anterior, não
+provisionados nesta). `wwwroot/` da Norn.API local ficou com o build copiado (gitignored, não
+commitado) — próxima sessão que rodar `dotnet run` direto sem copiar `dist/` de novo serve a API
+sem dashboard, comportamento esperado (não é regressão).
+
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
 ADRs → docs/adr/
 Métricas → docs/metrics-matrix.md (nasce na Fase 4)
 Tabela de regras (golden do teste) → docs/rule-table.md (nasce na Fase 8)
+Contrato da Norn.API (rotas, DTOs, enums, eventos do hub) → docs/norn-api-contract.md (nasce na Fase 11)
