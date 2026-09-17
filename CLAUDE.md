@@ -491,6 +491,53 @@ final — o pod que sofreu as `OutOfMemoryException` internas ficou incapaz de e
 mesmo depois do caos desligado; o restart resolveu, confirmado por `kubectl top` e consulta direta
 ao Prometheus mostrando dado fresco antes de encerrar.
 
+**Terceira tentativa do circuit breaker via F3 (sessão de acompanhamento seguinte) — método novo,
+mais preciso, mas ainda não fechou; achado novo e mais exato do que "sessão longa".** Em vez de
+quebrar RBAC (armadilha já conhecida: o Worker local usa kubeconfig de admin, não a
+`norn-executor`), a falha foi injetada direto no Redis, sem tocar Kubernetes — uma regra de ACL
+cirúrgica (`ACL SETUSER default -set (~norn:platform:config:* +set) (~norn:platform:cooldown:*
++set)`) nega só o comando `SET` sobre `shop:flags:*` (onde `RedisFeatureFlagWriter.SetAsync`
+escreve), reabrindo `SET` explicitamente para os prefixos que `RedisPlatformConfig.SetModeAsync`
+(crítico: é assim que o disjuntor força `Observe`) e `RedisCooldownStore.SetCooldownAsync` usam.
+Validada com `ACL DRYRUN` antes de rodar o Worker de verdade — confirma isolamento exato: só o
+`ToggleFeatureFlag` falha, nada mais no laço é afetado.
+
+- **Funcionou como projetado**: 4 falhas reais de `ToggleFeatureFlag` (`HealingOutcome.Status =
+  Failed`, `RuleEngine`, mensagem do Redis propagada) confirmadas ao vivo em duas sequências
+  limpas (3 seguidas, depois mais 1) — a flag `shop:flags:payment.gateway.bypass` nunca virou
+  `true` durante toda a tentativa, confirmando que o bloqueio segurou.
+- **Causa nova e mais precisa do motivo de nunca fechar 5: `CircuitBreakerState` é um contador
+  único e global** — não por tipo de ação nem por alvo (`RecordSideEffectsAsync` chama
+  `circuitBreaker.RecordSuccess()` sempre que `applyResult.Outcome == Succeeded`, para **qualquer**
+  ação, e isso zera a sequência inteira). Num cluster testado o dia inteiro, degradação real de
+  fundo (memória do Catalog, latência do Order sob a carga do `Norn.LoadGenerator`) produz de vez
+  em quando um `ScaleUp`/`RestartPod` que aplica de verdade (`PartiallyApplied` conta como sucesso
+  de aplicação para o disjuntor, mesmo com `SloRestored=false` — só a etapa de *apply*, não a de
+  verificação, decide isso) — e isso resetou a sequência do Payment duas vezes nesta tentativa
+  (às 12:48 e de novo às 13:13), sempre antes de chegar em 5. Achado à parte, confirmado de novo:
+  a habituação de severidade (ADR-14) também atinge o F3, não só o F1 — a detecção do sinal de
+  latência do gateway parou por ~12 min mesmo com o valor real ainda Crítico (3-5s), e só voltou
+  depois de um toggle desativa/reativa do F3 (força um changepoint novo contra a baseline já
+  acostumada).
+- **Incidente self-inflicted, resolvido**: `ACL SETUSER default reset nopass ...` (tentando
+  restaurar o Redis ao padrão) sem incluir `on` explícito deixou o usuário `default` desligado —
+  `reset` no `ACL SETUSER` desliga o usuário como parte da limpeza, e sem `on` depois ele não volta
+  a ficar ativo. Todo cliente sem autenticação (inclusive o próprio `redis-cli` usado para
+  consertar) passou a levar `NOAUTH`. Sem `aclfile` configurado no container, a ACL só vive em
+  memória — um `docker restart norn-redis` bastou para restaurar o `default` de fábrica
+  (`nopass ~* &* +@all`), com os dados do volume nomeado intactos. Registrar para a próxima vez que
+  mexer em `ACL SETUSER ... reset`: sempre incluir `on` no mesmo comando.
+- **Decisão**: não perseguir mais nesta sessão. O padrão já é claro o suficiente para não precisar
+  de uma quarta tentativa improvisada — fechar de verdade exigiria suprimir toda ação concorrente
+  bem-sucedida durante a janela do teste (ex.: quebrar RBAC de verdade via token da
+  `norn-executor`, como nas tentativas anteriores, *em conjunto* com o bloqueio de Redis já validado
+  aqui, para que absolutamente nenhum apply em nenhum alvo consiga suceder) — desenho de teste
+  deliberado para uma sessão futura, não algo para iterar às cegas no fim de um dia já muito longo.
+
+**Ambiente ao fim desta tentativa:** F3 desativado, ACL do Redis restaurada ao padrão (`default on
+nopass ~* &* +@all`), modo `Observe`, `shop:flags:payment.gateway.bypass = false`, Catalog e Order
+de volta a 1 réplica cada, `Worker`/`Norn.LoadGenerator`/`port-forward` locais encerrados.
+
 **Fase 10 — Norn.API (BFF + SignalR), concluída: implementada, testada e validada ao vivo de ponta
 a ponta (Worker + API como processos separados, DoD integral fechado).** `Norn.API` criado do zero
 (era só uma pasta com `.gitkeep`): sete
