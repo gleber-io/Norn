@@ -11,11 +11,12 @@ resources:
   - order.yaml
   - payment.yaml
   - norn-platform.yaml
+  - norn-api.yaml
 
 # bootstrap.ps1 substitui as tags "placeholder" pelo SHA do commit em build (7.4:
-# "imagens com tag imutável, nunca latest") via `kustomize edit set image`. norn-platform-worker
-# não entra nesse laço (bootstrap.ps1 não constrói esta imagem ainda, ver norn-platform.yaml) —
-# fica com a tag "placeholder" até alguém decidir ligar o build.
+# "imagens com tag imutável, nunca latest") via `kustomize edit set image`. norn-platform-worker e
+# norn-platform-api não entram nesse laço (bootstrap.ps1 não constrói estas imagens ainda, ver
+# norn-platform.yaml/norn-api.yaml) — ficam com a tag "placeholder" até alguém decidir ligar o build.
 images:
   - name: norn-shop-catalog-api
     newName: norn-shop-catalog-api

@@ -806,6 +806,39 @@ provisionados nesta). `wwwroot/` da Norn.API local ficou com o build copiado (gi
 commitado) — próxima sessão que rodar `dotnet run` direto sem copiar `dist/` de novo serve a API
 sem dashboard, comportamento esperado (não é regressão).
 
+**Residual de empacotamento da Norn.API fechado (sessão de acompanhamento) — mesma decisão do
+Worker na Fase 9: empacotado, não ligado ao `bootstrap.ps1`.** `src/Platform/Norn.API/Dockerfile`
+criado — multi-stage com um estágio a mais que o padrão do Worker/Shop: `frontend-build`
+(`node:22-slim`, `npm ci && npm run build` em `web/norn-dashboard`, sem rodar `generate:api` —
+`src/lib/api-types.ts` já é commitado, então não depende da API rodando durante o build) copiado
+pra `wwwroot/` no estágio final, ao lado do publish self-contained de sempre (`runtime-deps:10.0`,
+`EXPOSE 8080`+`ASPNETCORE_URLS`, padrão do Catalog.API — diferente do Worker, que não expõe HTTP).
+`deploy/k8s/base/norn-api.yaml` novo — Deployment+Service em `norn-platform`, molde do
+`norn-platform.yaml` do Worker combinado com os probes/securityContext já usados em
+`catalog.yaml` (`startupProbe`/`livenessProbe` em `/health/live`, `readinessProbe` em
+`/health/ready`). Duas diferenças deliberadas do manifesto do Worker: (1) **sem**
+`serviceAccountName: norn-executor` — a Norn.API nunca fala com a API do Kubernetes, só
+Postgres/Redis/Prometheus via HTTP/TCP, então fica na ServiceAccount `default`; (2) env
+`Prometheus__BaseUrl` (não `Norn__Monitor__PrometheusBaseUrl` do Worker) — são seções de config
+diferentes, confirmado lendo `Program.cs` antes de escrever o manifesto. Registrado em
+`deploy/k8s/base/kustomization.yaml` (`resources:`), **sem** entrar no bloco `images:` — mesmo
+padrão do `norn-platform-worker`, mantém a tag travada em `:placeholder` até alguém decidir ligar
+o build ao `bootstrap.ps1`.
+
+**Verificado de ponta a ponta, não só escrito.** `docker build` da imagem multi-stage completo
+(front + dotnet) sem erro; `kubectl kustomize deploy/k8s/base` compõe limpo com o recurso novo.
+Teste ao vivo adicional contra o cluster k3d real (Postgres/Redis/Prometheus reaproveitados):
+imagem taggeada e publicada no registry local do k3d (`k3d-norn-registry:5000` — achado de
+ambiente: a imagem precisa desse hostname específico, não `localhost:5000`, porque o mirror do
+containerd em `/etc/rancher/k3s/registries.yaml` só intercepta esse hostname; o overlay
+`deploy/k8s/overlays/local/kustomization.yaml` já resolve isso via `newName` para o Shop, e
+qualquer teste manual futuro do `norn-api.yaml`/`norn-platform.yaml` precisa do mesmo prefixo),
+`kubectl apply` isolado do manifesto (fora do fluxo padrão, só verificação) resultou em pod
+`Running 1/1` de verdade — os dois probes HTTP (`/health/live`, `/health/ready`) passaram contra a
+infra real, e `curl` via port-forward confirmou `200` nos dois health checks **e** no dashboard
+estático (`GET /` devolvendo `index.html` de dentro do `wwwroot/` empacotado na imagem). Deployment
+e Service de teste removidos do cluster ao final — nunca fizeram parte do fluxo padrão.
+
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
 ADRs → docs/adr/

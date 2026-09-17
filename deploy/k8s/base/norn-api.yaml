@@ -1,0 +1,100 @@
+# Norn.API em norn-platform — empacotamento (residual das Fases 9/11, ver CLAUDE.md), o mesmo
+# tratamento já dado ao Norn.Worker (norn-platform.yaml) na Fase 9. O bootstrap.ps1 ainda não
+# constrói nem publica a imagem norn-platform-api (não entra no array $services do bootstrap.ps1
+# nem no bloco `images:` deste kustomization) — aplicar este manifesto sem build/push manual
+# prévio deixa o Deployment em ImagePullBackOff. Fora do fluxo padrão por decisão explícita: a
+# operação atual roda a Norn.API no host via `dotnet run`, usada em toda validação ao vivo desde a
+# Fase 10, e ligar isto ao bootstrap.ps1 trocaria esse modelo por padrão sem pedido do usuário.
+#
+# Sem serviceAccountName: norn-executor — diferente do Worker, a Norn.API nunca fala com a API do
+# Kubernetes (só Postgres/Redis/Prometheus via HTTP/TCP), então usa a ServiceAccount default do
+# namespace, sem nenhuma permissão RBAC adicional.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: norn-api
+  namespace: norn-platform
+  labels:
+    app: norn-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: norn-api
+  template:
+    metadata:
+      labels:
+        app: norn-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 5678
+      containers:
+        - name: norn-api
+          image: norn-platform-api:placeholder
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ConnectionStrings__Knowledge
+              value: "Host=host.k3d.internal;Database=norn;Username=norn;Password=norn"
+            - name: Redis__ConnectionString
+              value: "host.k3d.internal:6379"
+            # Seção Prometheus:BaseUrl lida direto pela Norn.API (Program.cs) — não confundir com
+            # Norn:Monitor:PrometheusBaseUrl do Worker, que é uma seção de config diferente.
+            - name: Prometheus__BaseUrl
+              value: "http://host.k3d.internal:9090"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://host.k3d.internal:4317"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: dataprotection-keys
+              mountPath: /home/nornapp/.aspnet/DataProtection-Keys
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: dataprotection-keys
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: norn-api
+  namespace: norn-platform
+spec:
+  selector:
+    app: norn-api
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: ClusterIP
