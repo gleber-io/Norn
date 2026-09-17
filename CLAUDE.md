@@ -74,9 +74,17 @@ demais); `DryRun` e o circuit breaker não foram exercitados em replay ao vivo c
 unitário). Tarefa 8 (manifestos K8s) feita, não ligada ao `bootstrap.ps1`. Detalhe completo abaixo.
 Decisão tomada: avançar para a Fase 10 em vez de fechar os residuais de F1/DryRun/breaker.
 **Fase 10 (Norn.API) concluída e fechada — DoD integral validado ao vivo, ver detalhe abaixo.**
-Residuais da Fase 9 (F1 `PartiallyApplied`, `DryRun`/breaker só com teste unitário) continuam em
-aberto, não bloqueiam a Fase 11. Próxima decisão: avançar para a Fase 11 (Dashboard React) ou
-fechar os residuais da Fase 9 primeiro.
+
+**Residuais da Fase 9 — sessão de fechamento em 17/09/2026, dois de três fechados:** F1/`RestartPod`
+fechado (bug real da query do Prometheus corrigido e provado ao vivo; o que sobra é calibração de
+janela/limiar, não bug — ver detalhe). Circuit breaker avançou (achou e corrigiu o Worker local
+usando kubeconfig de admin em vez do token da `norn-executor`; `StartupCapabilityVerifier` provado
+recusando o boot de verdade nas duas permissões) mas não fechou as 5 falhas consecutivas — travou
+num obstáculo do ambiente (severidade habituada após 8h de sessão + o próprio caos quebrando a
+telemetria do pod sob pressão sustentada), não do mecanismo. `DryRun` continua sem replay ao vivo.
+Nenhum dos três bloqueia a Fase 11. Próxima decisão: avançar para a Fase 11 (Dashboard React) ou
+retomar os dois itens que sobraram (calibração de F1, circuit breaker + DryRun) numa sessão nova,
+com o ambiente descansado.
 
 Cluster k3d validado de ponta a ponta (Fase 6): `bootstrap.ps1` leva de zero a sistema funcional em um comando, fluxo completo de pedido roda dentro do cluster, RBAC do ADR-03 confirmado (positivo e negativo), `maxReplicas=3` valida escala real, Traefik ausente (D9), `container_memory_working_set_bytes`/`container_cpu_usage_seconds_total` via cAdvisor fecham o DoD da Fase 4.
 
@@ -395,6 +403,74 @@ SHA de commit — a próxima `bootstrap.ps1` sobrescreve), réplicas de volta ao
 `Norn.LoadGenerator` locais encerrados. O limite de memória do Catalog ficou em 384Mi **só no
 cluster ao vivo** (via `kubectl patch`) — `deploy/k8s/base/catalog.yaml` também foi atualizado, então
 uma reaplicação futura do manifesto (`bootstrap.ps1` ou `kubectl apply -k`) mantém 384Mi.
+
+**Fechamento dos residuais da Fase 9 — sessão de acompanhamento longa (17/09/2026), dois de três
+fechados com evidência ao vivo forte; o terceiro avançou mas não fechou.**
+
+**F1/`RestartPod` `PartiallyApplied` → causa raiz encontrada e corrigida, não é mais um bug.**
+`PrometheusMetricSource.QueryInstantAsync` (`src/Platform/Norn.Monitor/Prometheus/PrometheusMetricSource.cs`)
+pegava `results[0]` sem critério quando a consulta batia em mais de uma série — depois de um
+`RestartPod`, o pod apagado ainda não expirou do lookback de staleness do Prometheus enquanto o pod
+novo já publicou a primeira amostra, e as duas casam o mesmo `exported_job`. Corrigido para escolher
+a amostra de timestamp mais recente entre os resultados — 11 testes novos em
+`Norn.Monitor.UnitTests` (inclusive um caso com os resultados fora de ordem, para provar que não é
+só "pega o último"), revisão de código sem achado bloqueante. **Provado ao vivo**: ao longo da
+sessão, a leitura de verificação sempre acompanhou o valor real do pod novo (cross-check direto com
+`kubectl top`), nunca uma leitura congelada do pod antigo. Um `RestartPod` real chegou a fechar
+`Succeeded`/`SloRestored=true` (120,1s de recuperação) durante a janela sem supervisão. **O que
+sobra, e é achado novo, não o bug antigo:** 120s não bastam para um pod .NET recém-criado assentar
+de forma confiável abaixo do limiar de 200MB — overhead de startup/JIT/GC inicial empurra o RSS pra
+cima por um tempo mesmo sem vazamento nenhum rolando. `ExecutorOptions.MemoryRestoredThresholdBytes`
+e/ou uma janela de verificação maior especificamente para `RestartPod` (hoje só existe uma
+`VerificationWindowSeconds` global, compartilhada por todo tipo de ação) ficam como item de
+calibração em aberto, não resolvido nesta sessão — decisão do usuário, não assumida aqui.
+
+**Circuit breaker — avançou bastante, não fechou; achados genuínos, não falha do código.** Duas
+descobertas importantes confirmadas ao vivo pela primeira vez:
+1. **O Worker local sempre rodou com o kubeconfig de admin, nunca com a ServiceAccount
+   `norn-executor`** — quebrar a `Role` não tem efeito nenhum nesse modo (mesma armadilha que a
+   Fase 9 já tinha descoberto para o `StartupCapabilityVerifier`, mas desta vez descoberta por um
+   `RestartPod` aplicando de verdade contra uma `Role` que eu tinha acabado de quebrar). Corrigido
+   gerando um token real via `kubectl create token norn-executor -n norn-platform` e rodando o
+   Worker com um `KUBECONFIG` próprio apontando pra esse token — `kubectl auth can-i` confirmou a
+   restrição de verdade antes de subir o Worker com ele.
+2. **`StartupCapabilityVerifier` recusa o boot de verdade contra as duas permissões
+   separadamente** (não só a combinação testada na Fase 9) — com `pods delete` quebrado, o Worker
+   com o token restrito literalmente não sobe (`InvalidOperationException` na inicialização,
+   mensagem nomeando a barreira certa); restaurando e quebrando só `deployments/scale patch` em vez
+   disso, mesmo resultado. Confirma que a checagem é tudo-ou-nada nas três capacidades, não um
+   carimbo de borracha — e que ela só pode ser furada quebrando a `Role` **depois** do boot (a
+   verificação roda uma única vez, no `Program.cs`), exatamente como o raciocínio já indicava.
+
+**O que impediu fechar as 5 falhas consecutivas — obstáculo do ambiente, não do mecanismo:** depois
+de ~8h de sessão contínua, a severidade (ADR-14) é relativa a um `expectedValue` que se ajustou para
+cima junto com os valores real altos, e o `RuleEngine` passou a decidir `NoOp` ("severidade Low — não
+age abaixo de Medium") mesmo com memória/latência genuinamente ruins — sem uma decisão real de
+`RestartPod`/`ScaleUp`, não há tentativa para falhar. Ao tentar resetar o baseline reiniciando o
+Catalog, o próprio efeito de caos (`MemoryRetentionEffect`) revelou um problema à parte: sob pressão
+sustentada de várias horas, o processo passou a lançar `OutOfMemoryException` internamente dentro do
+laço de tick do caos (capturada e logada, não derruba o processo) — e nesse estado a exportação de
+métricas para o Collector parou de funcionar por completo (confirmado via consulta direta ao
+Prometheus: zero séries para `Norn.Shop.Catalog.API` por vários minutos, mesmo com `kubectl top`
+mostrando memória real alta), o que por sua vez deixa o Analyzer sem dado nenhum pra detectar. Um
+restart limpo do pod resolveu (métricas voltaram a fluir imediatamente) — mas o padrão em si
+("caos sustentado por muitas horas pode degradar o processo a ponto de quebrar a própria telemetria
+que o Norn depende pra reagir") é um achado que vale registrar para a Fase 12: uma campanha de
+verdade não deveria rodar caos ininterrupto por 8h sobre o mesmo pod sem intervenção.
+
+**`DryRun` — não validado ao vivo nesta sessão** (a garantia estrutural — nunca aplica de verdade,
+nunca grava cooldown/Redis, retorna antes da janela de verificação — já é coberta por teste unitário
+dedicado e foi reconfirmada por leitura linha a linha de `HealingActionExecutor.ExecuteAsync`,
+linhas 67-99: o curto-circuito de `dryRun` acontece antes de qualquer `ApplyAsync`/
+`RecordSideEffectsAsync` real). Tentativa ao vivo esbarrou no mesmo problema de habituação de
+severidade que travou o circuit breaker, e a sessão foi encerrada antes de contornar isso também.
+
+**Ambiente ao fim desta sessão:** RBAC restaurado ao manifesto committado (as quatro regras
+originais), modo `Observe`, caos F1 desativado, Catalog e Order de volta a 1 réplica cada, `Worker`/
+`API`/cliente SignalR locais encerrados. O pod do Catalog precisou de um restart limpo adicional ao
+final — o pod que sofreu as `OutOfMemoryException` internas ficou incapaz de exportar métricas
+mesmo depois do caos desligado; o restart resolveu, confirmado por `kubectl top` e consulta direta
+ao Prometheus mostrando dado fresco antes de encerrar.
 
 **Fase 10 — Norn.API (BFF + SignalR), concluída: implementada, testada e validada ao vivo de ponta
 a ponta (Worker + API como processos separados, DoD integral fechado).** `Norn.API` criado do zero

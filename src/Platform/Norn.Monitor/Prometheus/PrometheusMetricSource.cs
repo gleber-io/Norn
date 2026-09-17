@@ -57,25 +57,43 @@ public sealed class PrometheusMetricSource(HttpClient httpClient, IOptions<Monit
         return samples;
     }
 
+    /// <summary>
+    /// Um seletor por <c>exported_job</c> pode bater em mais de uma série por um tempo depois de
+    /// um <c>RestartPod</c>: o pod antigo (apagado) ainda não expirou do lookback de staleness do
+    /// Prometheus, e o pod novo já publicou a primeira amostra — as duas casam o mesmo
+    /// <c>exported_job</c>, com <c>exported_instance</c> diferente. Pegar <c>results[0]</c> sem
+    /// critério pegava qualquer uma das duas, arbitrariamente — corrompendo a verificação de
+    /// <c>SloRestored</c> especificamente para a única ação que destrói e recria a série (achado
+    /// do replay ao vivo da Fase 9). A amostra mais recente por timestamp é sempre a série viva.
+    /// </summary>
     public async Task<MetricSample?> QueryInstantAsync(string promQlQuery, CancellationToken cancellationToken)
     {
         var url = $"/api/v1/query?query={Uri.EscapeDataString(promQlQuery)}";
         var response = await SendAsync(url, cancellationToken);
-        var results = response?.Data?.Result;
-        var result = results is { Count: > 0 } ? results[0] : null;
-        if (result?.Value is null || !TryParsePoint(result.Value, out var timestamp, out var value))
+        var results = response?.Data?.Result ?? [];
+
+        MetricSample? freshest = null;
+        foreach (var result in results)
         {
-            return null;
+            if (result.Value is null || !TryParsePoint(result.Value, out var timestamp, out var value))
+            {
+                continue;
+            }
+
+            if (freshest is null || timestamp > freshest.TimestampUtc)
+            {
+                freshest = new MetricSample
+                {
+                    MetricName = MetricName(result.Metric),
+                    Target = ToServiceTarget(result.Metric),
+                    TimestampUtc = timestamp,
+                    Value = value,
+                    Labels = result.Metric,
+                };
+            }
         }
 
-        return new MetricSample
-        {
-            MetricName = MetricName(result.Metric),
-            Target = ToServiceTarget(result.Metric),
-            TimestampUtc = timestamp,
-            Value = value,
-            Labels = result.Metric,
-        };
+        return freshest;
     }
 
     private async Task<PrometheusResponse?> SendAsync(string relativeUrl, CancellationToken cancellationToken)
