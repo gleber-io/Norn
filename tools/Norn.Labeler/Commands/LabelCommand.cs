@@ -93,7 +93,8 @@ public static class LabelCommand
             string detail;
             if (finalState == TerminationState.InvalidInstrumentation && labeling.TerminationState != TerminationState.InvalidInstrumentation)
             {
-                detail = $"achieved_rps={achievedRps:F2} fora de ±{LoadDeliveryChecker.AllowedDeviation:P0} de target_rps={targetRps:F2}";
+                detail = string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"achieved_rps={achievedRps:F2} fora de ±{LoadDeliveryChecker.AllowedDeviation:P0} de target_rps={targetRps:F2}");
             }
             else if (scenario == "F5")
             {
@@ -117,7 +118,7 @@ public static class LabelCommand
         Console.WriteLine($"termination_state={finalState}");
         Console.WriteLine($"onset_at_utc={labeling.OnsetAtUtc?.ToString("O") ?? "null"}");
         Console.WriteLine($"recovered_at_utc={labeling.RecoveredAtUtc?.ToString("O") ?? "null"}");
-        Console.WriteLine($"achieved_rps={achievedRps:F2}");
+        Console.WriteLine(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"achieved_rps={achievedRps:F2}"));
     }
 
     private static double? TryGetDouble(string[] args, string flag)

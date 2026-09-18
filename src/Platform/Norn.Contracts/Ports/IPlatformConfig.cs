@@ -40,6 +40,12 @@ public interface IPlatformConfig
     Task<ForecastConfig> GetForecastConfigAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Escrita do forecast (Fase 12, reset de estado — defensivo: garante que nenhum teste ad hoc
+    /// anterior deixou a Fase 13 ligada por engano antes de uma execução da campanha de H1/H2).
+    /// </summary>
+    Task SetForecastConfigAsync(ForecastConfig config, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Escrita do modo (Fase 10, <c>PUT /api/v1/mode</c>; Fase 9, circuit breaker do ADR-04,
     /// barreira c — transição automática para <see cref="PlatformMode.Observe"/> após falhas
     /// consecutivas). Implementada por Norn.Knowledge (Fase 9).

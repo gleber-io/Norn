@@ -80,6 +80,16 @@ internal sealed partial class RedisPlatformConfig(
         await subscriber.PublishAsync(RedisChannel.Literal(PlatformConfigInvalidationSubscriber.InvalidationChannel), ModeKey);
     }
 
+    /// <summary>Fase 12 — reset de estado do <c>run-experiment.ps1</c> (defensivo, tarefa 2a).</summary>
+    public async Task SetForecastConfigAsync(ForecastConfig config, CancellationToken cancellationToken)
+    {
+        var database = connectionMultiplexer.GetDatabase();
+        await database.StringSetAsync(KeyPrefix + ForecastKey, System.Text.Json.JsonSerializer.Serialize(config));
+
+        var subscriber = connectionMultiplexer.GetSubscriber();
+        await subscriber.PublishAsync(RedisChannel.Literal(PlatformConfigInvalidationSubscriber.InvalidationChannel), ForecastKey);
+    }
+
     public async Task<PlannerBackend> GetPlannerBackendAsync(CancellationToken cancellationToken)
     {
         var cacheKey = CacheKey(PlannerBackendKey);

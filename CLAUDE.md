@@ -991,17 +991,51 @@ revisão: `run-campaign.ps1` checava `$LASTEXITCODE` depois de invocar `run-expe
 mas o script chamado sinaliza falha por `throw` (exceção terminante), não por código de saída — a
 checagem nunca dispararia; corrigido com `try`/`catch`.
 
-**O que fica para a sessão que rodar os pilotos:** validar o orçamento de `-DurationMinutes` (25 min
-é estimativa, não medição — §3 pede exatamente os 3 pilotos pra isso), validar
-`InjectionPhaseSeconds` contra o ciclo senoidal real do `Norn.LoadGenerator`, confirmar que o
-`exported_job` usado nas queries do Labeler bate com o que o Prometheus real grava, exercitar o
-reset do `plannerBackend` contra um `Norn.Worker` ao vivo (nunca chamado fora de teste nesta sessão),
-e observar de perto o risco residual do OOM×`RestartPod` descrito acima no primeiro F1 dos braços
-B/C. `norn:platform:config:forecast` não é resetado por `run-experiment.ps1` — assume-se o default
-desligado do ADR-16 (nenhuma sessão até agora ligou forecast no Worker ao vivo); e captura de
-temperatura/clock de CPU (`cpu_temp_max_celsius`/`cpu_clock_avg_mhz`) não foi implementada — os
-parâmetros existem no `Norn.Labeler label` mas ficam nulos até alguém cablear uma fonte (Windows não
-expõe temperatura de CPU sem WMI de terceiros ou admin).
+**Sessão de acompanhamento (18/09/2026) — máquina reiniciada, ambiente recuperado, três dos sete
+pendentes fechados sem precisar de execução real da campanha.** Depois do restart do Windows:
+Docker Desktop não subiu sozinho (processo ausente — `Start-Process` nele resolveu), os três
+containers do k3d (`server-0`, `serverlb`, `registry`) sobreviveram e voltaram sozinhos, mas a infra
+do Compose (Postgres/Redis/RabbitMQ/Prometheus/Grafana/Tempo/Collector) precisou de
+`docker compose up -d` de novo. `k3d cluster stop`/`start` reinjetou `host.k3d.internal` no CoreDNS
+(mesmo procedimento já documentado na Fase 9) — desta vez os três pods do Shop nem chegaram a
+`CrashLoopBackOff`, foram direto a `1/1 Running` (~70s), porque a infra já estava de pé antes deles
+tentarem religar.
+
+Com tudo de pé, três pendências fechadas sem gastar as ~20h da campanha:
+1. **`exported_job` confirmado contra o Prometheus real** — `curl /api/v1/label/exported_job/values`
+   devolveu exatamente `Norn.Shop.Catalog.API`/`Order.API`/`Payment.API` (mais `Norn.API`/`Norn.Worker`),
+   batendo com o que `run-experiment.ps1` já usava. `http_server_request_duration_seconds_count`
+   com `http_response_status_code` confirmado existindo de verdade para o Catalog.
+2. **`IPlatformConfig.SetForecastConfigAsync`** (novo método, mesmo padrão de
+   `SetModeAsync`/`SetPlannerBackendAsync`) — `ResetCommand` agora desliga o forecast a cada reset,
+   defensivo contra qualquer teste ad hoc futuro contaminar H1/H2 em silêncio.
+3. **Captura de clock médio de CPU** — `run-experiment.ps1` agora amostra
+   `Get-CimInstance Win32_Processor` no mesmo poll de 5s que já verifica `OOMKilled`, sem custo
+   extra de espera, e repassa a média pro `Norn.Labeler label --cpu-clock-avg-mhz`. Temperatura
+   continua sem captura (exigiria LibreHardwareMonitor ou WMI de terceiros) — só vale investir se
+   os pilotos mostrarem sinal de throttling térmico.
+
+**Primeiro teste ao vivo real do `Norn.Labeler` contra Postgres/Redis/Prometheus de verdade —
+descartável, limpo depois, mas prova que a esteira funciona.** `reset --arm C` confirmou
+`mode=Active`/`plannerBackend=RuleEngine` gravados e lidos de volta do Redis real — primeira
+confirmação viva do switch de braço da Fase 12 (sem subir um `Norn.Worker` de verdade, então ainda
+não prova que o Worker *lê* o valor certo em runtime, só que o adaptador grava/lê certo). `init-run`
+gravou uma linha real em `platform.experiment_runs` (INSERT confirmado no log do EF Core). `label`
+fez uma chamada HTTP real ao Prometheus (`query_range`, 200, via o handler de resiliência padrão),
+leu a linha de volta e gravou `termination_state=InvalidNoOnset` — resultado correto, já que nenhum
+caos estava ativo. **Um bug real de cultura achado e corrigido no processo:** `Console.WriteLine`
+formatava `achieved_rps` com `:F2` sem `CultureInfo.InvariantCulture` — em uma máquina pt-BR isso
+imprime `9,90` em vez de `9.90` no log de diagnóstico (não afeta o CSV nem o Postgres, que já usavam
+`InvariantCulture` corretamente; só a linha de stdout). Corrigido com `string.Create(CultureInfo.InvariantCulture, $"...")`.
+Linha de teste removida do Postgres real depois (`DELETE FROM experiment_runs WHERE ...`), estado da
+plataforma revertido pra `Observe` (padrão seguro, ADR-05) ao final.
+
+**O que ainda fica para a sessão que rodar os pilotos de verdade:** validar o orçamento de
+`-DurationMinutes` (25 min é estimativa, não medição — §3 pede exatamente os 3 pilotos pra isso),
+validar `InjectionPhaseSeconds` contra o ciclo senoidal real do `Norn.LoadGenerator`, exercitar o
+`plannerBackend` contra um `Norn.Worker` de verdade rodando o loop (hoje só o adaptador foi
+confirmado, não o consumo em runtime), e observar de perto o risco residual do OOM×`RestartPod`
+(poll de 5s ainda pode perder um `RestartPod` mais rápido que isso) no primeiro F1 dos braços B/C.
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)

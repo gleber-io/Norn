@@ -206,6 +206,7 @@ if ($Scenario -eq "F5") {
 $deadlineUtc = $startedAtUtc.AddMinutes($DurationMinutes)
 $pollIntervalSeconds = 5
 $oomKilledAtUtc = "none"
+$cpuClockSamplesMhz = @()
 
 # Achado da revisão de código antes do commit: consultar `lastState.terminated` só uma vez no
 # teardown perde o evento sempre que o próprio Norn reage ao F1 com RestartPod (DeleteNamespacedPodAsync)
@@ -229,9 +230,19 @@ while ([DateTimeOffset]::UtcNow -lt $deadlineUtc) {
         }
     }
 
+    # Clock médio de CPU (§3, DoD da Fase 12: "throttling térmico como covariável, não como
+    # ruído") -- amostrado no mesmo poll, sem custo extra de espera. Temperatura fica sem captura
+    # nesta sessão: o Windows não expõe isso sem WMI de terceiros (LibreHardwareMonitor) ou admin.
+    try {
+        $clock = (Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1).CurrentClockSpeed
+        if ($clock) { $cpuClockSamplesMhz += $clock }
+    } catch { }
+
     $sleepSeconds = [math]::Min($pollIntervalSeconds, ($deadlineUtc - [DateTimeOffset]::UtcNow).TotalSeconds)
     if ($sleepSeconds -gt 0) { Start-Sleep -Seconds $sleepSeconds }
 }
+
+$cpuClockAvgMhz = if ($cpuClockSamplesMhz.Count -gt 0) { ($cpuClockSamplesMhz | Measure-Object -Average).Average } else { $null }
 
 # --- Teardown --------------------------------------------------------------------------
 $observationEndUtc = [DateTimeOffset]::UtcNow
@@ -251,19 +262,24 @@ if ($portForwardJob) {
 
 # --- Rotulagem (tarefa 1) ----------------------------------------------------------------
 Step "Rotulando a execução (Norn.Labeler label)"
-dotnet run --project tools/Norn.Labeler -- label `
-    --run-id $runId `
-    --scenario $Scenario `
-    --arm $Arm `
-    --repetition $Repetition `
-    --run-order $RunOrder `
-    --target-rps $targetRps `
-    --target-service $target.ExportedJob `
-    --window-start-utc $startedAtUtc.ToString("o") `
-    --observation-end-utc $observationEndUtc.ToString("o") `
-    --load-report $loadReportPath `
-    --oom-killed-at-utc $oomKilledAtUtc `
-    --f5-kill-at-utc $f5KillAtUtc
+$labelArgs = @(
+    "run", "--project", "tools/Norn.Labeler", "--",
+    "label",
+    "--run-id", $runId,
+    "--scenario", $Scenario,
+    "--arm", $Arm,
+    "--repetition", $Repetition,
+    "--run-order", $RunOrder,
+    "--target-rps", $targetRps,
+    "--target-service", $target.ExportedJob,
+    "--window-start-utc", $startedAtUtc.ToString("o"),
+    "--observation-end-utc", $observationEndUtc.ToString("o"),
+    "--load-report", $loadReportPath,
+    "--oom-killed-at-utc", $oomKilledAtUtc,
+    "--f5-kill-at-utc", $f5KillAtUtc
+)
+if ($null -ne $cpuClockAvgMhz) { $labelArgs += @("--cpu-clock-avg-mhz", $cpuClockAvgMhz) }
+dotnet @labelArgs
 if ($LASTEXITCODE -ne 0) { throw "Norn.Labeler label falhou" }
 
 # --- Teardown final: ambiente limpo para a próxima execução -------------------------------

@@ -7,11 +7,12 @@ namespace Norn.Labeler.Commands;
 
 /// <summary>
 /// Fase 12, tarefa 2a — reset de estado antes de cada execução. Zera toda a árvore
-/// <c>shop:flags:</c> e grava modo + <see cref="PlannerBackend"/> conforme o braço, pelos
-/// adaptadores reais (invalidação pub/sub inclusa) — nunca por escrita direta de chave Redis, que
-/// duplicaria o formato e esqueceria de publicar a invalidação. K8s (réplicas de baseline) e a
-/// árvore <c>norn:platform:config:forecast</c> são resetados pelo próprio <c>run-experiment.ps1</c>
-/// via <c>kubectl</c> — não precisam de um adaptador .NET.
+/// <c>shop:flags:</c>, grava modo + <see cref="PlannerBackend"/> conforme o braço e desliga o
+/// forecast (defensivo — nenhuma sessão até a Fase 12 ligou isso ao vivo, mas um teste ad hoc
+/// futuro não pode contaminar H1/H2 em silêncio), tudo pelos adaptadores reais (invalidação
+/// pub/sub inclusa) — nunca por escrita direta de chave Redis, que duplicaria o formato e
+/// esqueceria de publicar a invalidação. K8s (réplicas de baseline) é resetado pelo próprio
+/// <c>run-experiment.ps1</c> via <c>kubectl</c> — não precisa de um adaptador .NET.
 /// </summary>
 public static class ResetCommand
 {
@@ -35,6 +36,7 @@ public static class ResetCommand
         var platformConfig = services.GetRequiredService<IPlatformConfig>();
         await platformConfig.SetModeAsync(mode, cancellationToken);
         await platformConfig.SetPlannerBackendAsync(backend, cancellationToken);
+        await platformConfig.SetForecastConfigAsync(new ForecastConfig { Enabled = false }, cancellationToken);
 
         // Lido de volta, não assumido — run-experiment.ps1 assere que corresponde ao braço pedido
         // antes de prosseguir (§3, tarefa 2a: "execução que falhe nessa conferência é descartada e refeita").
