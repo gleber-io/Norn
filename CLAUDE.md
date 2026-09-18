@@ -1093,12 +1093,57 @@ no procedimento da campanha, não corrigido em código nesta sessão).
   execução que não teria dado dado confiável. Confirma que o `Norn.Worker` **precisa rodar num
   processo dedicado**, sem outras cargas de trabalho pesadas concorrentes, durante a campanha real.
 
-**O que ainda fica para a sessão que fechar os pilotos de verdade:** repetir o piloto de F1/C (e
-os outros cenários/braços) com a máquina dedicada só ao `Norn.Worker`+`LoadGenerator` (sem builds,
-sem múltiplos ciclos de restart manual concorrentes) pra conseguir uma execução `Recovered` ou
-`CensoredAtWindowEnd` de verdade; validar `-DurationMinutes`/`InjectionPhaseSeconds` com dado real;
-decidir se subir o `Norn.Worker` deve entrar no próprio `run-experiment.ps1`/`run-campaign.ps1`
-(hoje é responsabilidade manual de quem roda) — decisão de design, não assumida aqui.
+**`run-campaign.ps1` passou a subir o `Norn.Worker` sozinho, um único processo para o lote
+inteiro** (não por execução — reiniciar a cada reset perderia o warmup do detector). Recusa subir
+se já existir um `Norn.Worker` rodando (evita dois disputando a mesma decisão, ADR-04), espera
+~150s de warmup antes da primeira execução, e derruba no `finally` ao fim do lote ou em qualquer
+falha. `run-experiment.ps1` isolado continua exigindo o Worker manual — documentado no próprio
+script.
+
+**Achado metodológico mais sério da sessão, achado só na 2ª tentativa real:** `achieved_requests`
+do `Norn.LoadGenerator` conta **respostas bem-sucedidas** (`dispatched.Count(ok => ok)`), não
+tentativas disparadas — então a razão achieved/intended cai de verdade quando o alvo degrada sob
+F1/F2/F3, que é **exatamente o sinal que o cenário existe para causar**. Medir essa razão sobre a
+janela inteira (como a §3 original sugeria) descartaria como `InvalidInstrumentation` justamente as
+execuções em que o cenário funcionou — enviesando a campanha contra achar dado nos casos
+interessantes. Confirmado ao vivo: duas tentativas seguidas do piloto F1/C saíram
+`InvalidInstrumentation` com `achieved_rps` bem abaixo do alvo (6.07 e 6.49 contra 11), mesmo com o
+relatório bruto do próprio `LoadGenerator` mostrando ~100% de sucesso **na fase de warmup** — o
+déficit vinha inteiro do período pós-injeção, quando o Catalog já estava em crash loop pelo F1.
+**Corrigido:** `LoadReportReader.Read` ganhou um terceiro parâmetro (`warmupEndUtc`) e só soma os
+buckets **anteriores ao instante da injeção** — `run-experiment.ps1` captura esse instante
+(`$injectionAtUtc`) logo antes do `POST /admin/chaos/activate` e repassa via `--injection-at-utc`
+novo do `Norn.Labeler label`. Mede a capacidade do gerador só enquanto o alvo ainda está saudável,
+sem se misturar com a saúde do alvo depois — a saúde do alvo já é medida por onset/recuperação, não
+precisa ser medida duas vezes por dois caminhos que discordam entre si.
+
+**Com a correção, a 3ª tentativa do piloto F1/C fechou como dado de campanha válido pela primeira
+vez.** `achieved_rps=11.02` (alvo 11 — quase exato, confirmando que o problema nunca foi capacidade
+real do gerador), onset real detectado, `termination_state=CensoredAtWindowEnd` — sem recuperação
+dentro dos 10 min, resultado legítimo (§3: censura é resultado, não descarte) para um `RestartPod`
+contra um F1 cuja intensidade nunca reseta, o mesmo padrão de calibração já documentado nos
+residuais da Fase 9. Linha real gravada em `tools/analysis/data/labeled-runs.csv` — primeiro dado de
+campanha do projeto.
+
+**Confirmado de novo, agora com o fallback do Redis testado ao vivo duas vezes:** a desativação via
+HTTP falhou nas 3 tentativas em ambas as repetições do piloto (Catalog em crash loop no instante do
+teardown, exatamente o cenário que motivou o fix) — o fallback via `redis-cli DEL` disparou
+automaticamente nas duas vezes, sem intervenção manual, confirmando que a correção do commit
+anterior funciona de verdade sob a condição real que a motivou.
+
+**Padrão que se repete a cada tentativa, sem exceção até agora:** depois do `RestartPod`/OOM, o pod
+novo do Catalog nasce com memória residual alta e entra em `CrashLoopBackOff` — só um ciclo
+`kubectl scale --replicas=0` seguido de `--replicas=1` devolve o baseline limpo (~70Mi);
+`kubectl delete pod` direto continua negado por permissão. Isso é limpeza operacional entre
+execuções, não faz parte do `run-experiment.ps1` (que já reseta réplicas no início de cada
+execução) — mas quem for rodar os 60 execuções da campanha real deve esperar precisar disso entre
+blocos, não é uma falha nova a cada vez.
+
+**O que ainda fica para fechar os pilotos do DoD da Fase 12:** rodar os outros dois pilotos exigidos
+(cenários/braços diferentes de F1/C) para calibrar `-DurationMinutes`/`InjectionPhaseSeconds` com
+mais de um ponto de dado; decidir se o ciclo de `kubectl scale 0→1` do Catalog entre execuções vale
+a pena automatizar dentro do `run-campaign.ps1` (hoje é manual, e a campanha real vai precisar disso
+repetidamente).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
