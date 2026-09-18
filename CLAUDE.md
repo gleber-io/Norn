@@ -837,7 +837,49 @@ qualquer teste manual futuro do `norn-api.yaml`/`norn-platform.yaml` precisa do 
 `Running 1/1` de verdade — os dois probes HTTP (`/health/live`, `/health/ready`) passaram contra a
 infra real, e `curl` via port-forward confirmou `200` nos dois health checks **e** no dashboard
 estático (`GET /` devolvendo `index.html` de dentro do `wwwroot/` empacotado na imagem). Deployment
-e Service de teste removidos do cluster ao final — nunca fizeram parte do fluxo padrão.
+e Service de teste **não foram removidos do cluster nesta sessão** (comando `kubectl delete`
+bloqueado por permissão repetidamente) — ficaram de pé em `norn-platform` como resíduo inofensivo
+do teste (sem tráfego real, isolado); remover com `kubectl delete -f deploy/k8s/base/norn-api.yaml`
+quando conveniente.
+
+**Calibração do `RestartPod` — investigada ao vivo (sessão de acompanhamento); achado estrutural
+substitui a hipótese antiga, `RestartPodVerificationWindowSeconds` mantido em 240s.** A hipótese
+registrada nos residuais da Fase 9 ("120s não bastam por overhead de startup/JIT/GC, 240s é uma
+estimativa, não medição de campanha") foi testada ao vivo três vezes contra o cluster real — e a
+causa raiz é outra, mais séria: **alongar a janela de verificação não fecha o caso geral.**
+
+Lendo `F1MemoryRetentionScenario.cs` e `MemoryRetentionEffect.cs`: a intensidade do F1 é
+`1 - e^(-decorrido/tau)` (`tau=90s`), calculada a partir do `ActivatedAtUtc` gravado no Redis — não
+reseta quando o pod é recriado pelo `RestartPod`. E `MemoryRetentionEffect.TickAsync` não tem
+limite de taxa: a cada tick (1s) aloca em loop apertado até bater `intensidade × F1MaxRetainedBytes`
+(300MB). Como o próprio laço do Norn (janela de correlação + ciclo de decisão) leva
+tipicamente ~90-100s pra decidir `RestartPod` depois da ativação do F1, a intensidade **já está em
+~0,6-0,7 no momento em que o pod é recriado** — e no tick seguinte o pod novo já sobe pra
+~200-370MB de memória forçada, quase instantaneamente. Não é "demora pra assentar": o alvo em si já
+nasce acima do limiar de 200MB (`MemoryRestoredThresholdBytes`), então nenhuma janela, por maior
+que seja, o traria pra baixo — a memória retida pelo efeito nunca é liberada enquanto a ativação
+estiver de pé (só `Reset()`, chamado só quando uma ativação é substituída).
+
+Tentativa de isolar o caso de "disparo cedo" (desativar o F1 no instante da decisão, antes do
+Executor aplicar): não é alcançável de fora — o Executor aplica a ação de forma síncrona, sem
+brecha entre a decisão logada e o `DeleteNamespacedPodAsync` real. Em três tentativas (desativando
+o F1 entre ~2s e ~35s depois da recriação do pod, o mais rápido que a reconexão do
+`kubectl port-forward` ao pod novo permitiu — achado à parte, reconfirma o padrão já registrado na
+Fase 9 de que o port-forward não segue a substituição do pod sozinho), o resultado foi sempre o
+mesmo platô alto (290-370MB): o tick já tinha corrido atrás do alvo já elevado antes de qualquer
+desativação externa conseguir competir. Dado `tau=90s` do F1 versus a latência própria de
+detecção+correlação+decisão do Norn (também da ordem de dezenas de segundos), **não existe hoje um
+"disparo cedo" alcançável por fora do sistema** — a interação entre os dois desenhos (ramp do F1,
+latência do laço reativo) estrutura o `RestartPod` pra quase sempre chegar tarde demais contra este
+cenário específico. O comentário original do `F1MemoryRetentionScenario.cs` já intuía isso
+("o F1 só tem uma tentativa de cura"), mas não com esta precisão.
+
+**Decisão tomada**: não mexer em `RestartPodVerificationWindowSeconds` nem em
+`MemoryRestoredThresholdBytes` nesta sessão — o número certo depende de mudar o desenho do
+cenário de caos (ex.: limitar a taxa de alocação do `MemoryRetentionEffect` por tick, pra um pod
+novo subir de forma gradual em vez de saltar pro alvo inteiro), decisão de escopo maior que uma
+calibração de configuração, fora desta rodada. `PartiallyApplied` continua sendo o resultado
+honesto e esperado do `RestartPod` contra F1 sustentado, não um defeito do Executor/Planner.
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
