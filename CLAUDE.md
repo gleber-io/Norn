@@ -7,6 +7,10 @@ dotnet test
 dotnet format --verify-no-changes
 deploy/bootstrap.ps1            # infra + observabilidade + cluster k3d + Shop, do zero (Fase 6)
 kubectl get pods -n norn-shop
+deploy/run-experiment.ps1       # uma execução da campanha (Fase 12) — reset/warmup/carga/injeção/coleta
+deploy/run-campaign.ps1         # a matriz inteira (60 execuções), blocos aleatorizados (Fase 12)
+deploy/dump-knowledge.ps1       # backup do Knowledge, fora do VHDX do WSL2 (Fase 12, tarefa 3b)
+tools/analysis/.venv/Scripts/python.exe tools/analysis/analyze.py --labeled <csv> --out-dir <dir>
 ```
 
 ## Arquitetura em 10 linhas
@@ -46,6 +50,8 @@ Norn é uma plataforma de self-healing MAPE-K para um e-commerce de referência 
 - Config da plataforma sob `norn:platform:config:` (ADR-16). Nunca no catálogo de flags do Shop, que é alvo de ação de cura
 - Flags do Shop sob `shop:flags:`, lidas por `IFeatureFlags` com invalidação pub/sub. O Payment consome `payment.gateway.bypass` (§5.7) — sem essa contraparte o `ToggleFeatureFlag` não tem efeito e o F3 não se recupera
 - Toda execução da campanha começa com reset: `shop:flags:` em `false` e modo gravado conforme o braço
+- Braço B/C (Fase 12) é `IPlatformConfig.PlannerBackend` (`Llm`/`RuleEngine`), sob `norn:platform:config:plannerBackend`, lido uma vez por ciclo em `AnomalyPipelineBackgroundService` — nunca dois binários diferentes para os dois braços (ADR-05, "mesmo binário"). Default `Llm` — sessões anteriores à Fase 12 não tinham esse switch e continuam se comportando igual
+- `Norn.Labeler` é o único lugar que decide onset/recuperação/estado de término (Fase 12) — fronteira com `tools/analysis/` (Python) é o CSV, e só ele. `container_oom_events_total` não é observável neste ambiente (containerd remove o cgroup antes do cAdvisor ler); o instante do `OOMKilled` para o F1 vem de `status.containerStatuses[].lastState.terminated` via `kubectl`, capturado por `run-experiment.ps1` — poll a cada 5s durante a janela, não uma leitura única no teardown, porque um `RestartPod` real apaga o Pod que sofreu o OOM antes do teardown
 - `AnomalyContext` é persistido inteiro em `anomaly_contexts` (jsonb) antes de ir ao Planner, em todos os modos, com `context_hash` canônico. Serialização canônica é uma só função, compartilhada com a montagem do prompt
 - RuleEngine é função pura: sem relógio, sem Redis, sem cooldown dentro. Cooldown e pré-condições são barreiras do ADR-04, separadas
 - Dashboard é servido pela própria Norn.API via wwwroot. Sem nginx. Mesma origem, sem CORS em runtime
@@ -880,6 +886,122 @@ cenário de caos (ex.: limitar a taxa de alocação do `MemoryRetentionEffect` p
 novo subir de forma gradual em vez de saltar pro alvo inteiro), decisão de escopo maior que uma
 calibração de configuração, fora desta rodada. `PartiallyApplied` continua sendo o resultado
 honesto e esperado do `RestartPod` contra F1 sustentado, não um defeito do Executor/Planner.
+
+**Fase 12 — Campanha experimental, ferramental implementado e testado; execução ao vivo (pilotos +
+campanha completa) ainda não iniciada, por decisão.** Sessão dedicada só a construir o que a Fase 12
+exige antes de gastar as ~20h de máquina da campanha: `Norn.Labeler`, `Norn.PairedAnalysis`,
+`tools/analysis/` (Python) e os três scripts de orquestração (`run-experiment.ps1`,
+`run-campaign.ps1`, `dump-knowledge.ps1`). Decisão explícita, tomada com o usuário antes de
+codificar: nesta sessão não se toca no cluster nem se dispara execução real — as 3 execuções piloto
+que o DoD da Fase 12 exige ficam para uma sessão de acompanhamento com o usuário presente e a
+máquina dedicada (checklist da tarefa 3a: sem sleep, sem Windows Update, etc.).
+
+**Duas lacunas reais do desenho original, achadas e fechadas nesta sessão, antes de escrever
+qualquer ferramenta em cima delas:**
+1. **Não existia como forçar o braço C a nunca chamar o LLM.** `AnomalyPipelineBackgroundService`
+   sempre chamava `LlmPlanner.DecideAsync` (que só cai pro `RuleEngine` em *falha*, §5.5) — não
+   havia opção de rodar o `RuleEngine` como decisor de primeira linha, que é literalmente o que o
+   braço C do §3 exige. Fechado com `IPlatformConfig.PlannerBackend` (`Llm`/`RuleEngine`, novo
+   enum), sob `norn:platform:config:plannerBackend` — mesmo padrão de cache+invalidação pub/sub que
+   `Mode` já tinha (`RedisPlatformConfig`). `AnomalyPipelineBackgroundService` passou a ler o
+   backend uma vez por ciclo e ramificar entre `ruleEngine.Decide(context)` e
+   `llmPlanner.DecideAsync(context, ct)` — os dois braços continuam **o mesmo binário** (ADR-05),
+   só muda uma chave de configuração lida em runtime.
+2. **`container_oom_events_total` não é observável neste ambiente** (já documentado em
+   `docs/metrics-matrix.md` desde a Fase 7) **e o F1 precisa do instante do `OOMKilled` pra rotular
+   o onset.** A alternativa que o próprio `metrics-matrix.md` já apontava —
+   `status.containerStatuses[].lastState.terminated` via K8s — existe como método
+   (`ITopologyReader.GetLastTerminationReasonAsync`) mas **nunca foi ligada a nada**: não gera
+   `AnomalySignal`, não é lida por ninguém no laço ao vivo. Decisão: não abrir essa frente agora
+   (tocaria Monitor/Analyzer, fora do escopo "só ferramental de campanha" desta sessão) — em vez
+   disso, `run-experiment.ps1` faz *poll* de `kubectl get pods -o jsonpath=...lastState.terminated`
+   a cada 5s durante toda a janela de observação, guardando o primeiro `OOMKilled` visto, e repassa
+   o timestamp pro `Norn.Labeler` via `--oom-killed-at-utc`. **Risco residual, não eliminado:** se o
+   `RestartPod` real disparar mais rápido que o intervalo de poll (5s), o Pod antigo pode ser
+   apagado antes do poll capturá-lo — achado da revisão de código antes do commit, documentado em
+   comentário no próprio script. Corrigir de vez exigiria capturar o timestamp dentro do próprio
+   `Norn.Executor` no instante da atuação, não só no teardown — fica para quando essa frente for
+   aberta de propósito, não como acréscimo aqui.
+
+**`Norn.Contracts`/`Norn.Knowledge`:** `IExperimentRunStore` (novo port) — `CreateAsync` grava as
+colunas de controle no reset (`ExperimentRunRecord`: cenário, braço, seeds, `started_at_utc`, etc.,
+já sem escritor desde a Fase 7), `UpdateLabelingResultAsync` grava as colunas de rotulagem depois do
+teardown (`ExperimentRunLabelingResult`: onset/recuperação/estado de término/`achieved_rps`/temp e
+clock de CPU). `ExperimentRunRow` teve sete colunas trocadas de `init` pra `set` — a linha já existe
+(criada no reset) quando o Labeler as calcula, bem depois. Testado contra Postgres real
+(Testcontainers): as duas escritas na mesma linha, na ordem real em que acontecem.
+
+**`tools/Norn.Labeler`** (composition root de campanha, exceção declarada do §4 — referencia
+`Norn.Knowledge` direto): três subcomandos.
+- `reset --arm A|B|C` — zera `shop:flags:` (via `IFeatureFlagWriter`, nunca escrita direta de chave
+  Redis), grava `Mode`+`PlannerBackend` pelos adaptadores reais (invalidação pub/sub inclusa), lê de
+  volta e imprime pro `run-experiment.ps1` assertar contra o braço pedido (§3, tarefa 2a).
+- `init-run` — grava `ExperimentRunRecord` a partir de flags de linha de comando.
+- `label` — o núcleo da fase: `OnsetRecoveryCalculator` (`Detection/`, função pura, sem I/O) decide
+  onset (5xx > 1% por 30s sustentado, ou `OOMKilled`, o que vier primeiro; F5 usa o instante do kill
+  como âncora, regra própria do §3) e recuperação (< 0,1% por 60s sustentado a partir do onset) sobre
+  a série de erro lida de um `PrometheusRangeClient` próprio (não reusa `Norn.Monitor` — Labeler não
+  o referencia). `LoadDeliveryChecker` marca `InvalidInstrumentation` quando `achieved_rps` foge de
+  ±10% do alvo, **e essa checagem tem precedência sobre o resultado do onset/recuperação** — decidido
+  aqui porque o Labeler já calcula `achieved_rps`, evitando espalhar a lógica de estado de término em
+  dois lugares. Resultado grava em `experiment_runs` e, se `Recovered`/`CensoredAtWindowEnd`, vira uma
+  linha de `tools/analysis/data/labeled-runs.csv` (formato Kaplan-Meier: `tempo_ate_recuperacao_segundos`
+  + `evento_observado`); `Invalid*` vai pro `discarded-runs.csv` com motivo — nunca os dois arquivos
+  ao mesmo tempo pra uma execução (§3: censura é resultado, descarte é defeito). Cabeçalho dos CSV em
+  snake_case de propósito (`[Name(...)]` do CsvHelper) — quem lê é Python, não C#. 14 testes unitários
+  sobre `OnsetRecoveryCalculator`/`LoadDeliveryChecker` (séries sintéticas: sustentação de 30s/60s,
+  prioridade OOM×taxa-de-erro, regra própria do F5, borda sem cobertura futura não conta como onset).
+
+**`tools/Norn.PairedAnalysis`** (Fase 12, tarefa 4a — H2 pareada): **não** referencia
+`Norn.Knowledge` (§4 — só `Norn.Contracts` + `Norn.Planner`, lê Postgres via `Npgsql` cru, mesma
+exceção documentada e agora coberta por dois `[Fact]` novos em `Norn.ArchitectureTests`). Lê todo
+`AnomalyContext` de execuções do braço B (join com `experiment_runs.arm = 'B'`), recalcula
+`RuleEngine.DecideActionType` — a função **pura** (Fase 8), nunca `RuleEngine.Decide`, que exigiria
+estado ao vivo e mediria ação eficaz, não ação esperada —, compara contra a ação que o LLM decidiu de
+fato (via `HealingPlan` do mesmo contexto) e contra a ação de referência do cenário, e escreve
+`paired-analysis.csv`. 5 testes unitários usando os nomes de métrica literais da assinatura M=7
+(`RuleEngine`), inclusive o caso real documentado em `docs/experiments/estabilidade-llm.md` (F3:
+LLM escolhe `NoOp`, regra escolhe `ToggleFeatureFlag`, só a regra bate com a referência).
+
+**`tools/analysis/`** (Python, fora do CI — §3): `requirements.txt` com as cinco bibliotecas do §3
+pinadas e instaladas de verdade no `.venv` (`lifelines==0.30.0`, `scipy==1.15.2`,
+`statsmodels==0.14.4`, `pandas==2.2.3`, `matplotlib==3.10.1`, todas compatíveis com o Python 3.13.3
+já provisionado na Fase 00). `survival_analysis.py` (Kaplan-Meier + log-rank via `lifelines`, Fisher
+exato pareado a×a via `scipy.stats`), `paired_mcnemar.py` (McNemar exato via `statsmodels`, mais
+concordância bruta), `analyze.py` (CLI única, gera `resumo.md` + um PNG de Kaplan-Meier por cenário).
+9 testes `unittest` (stdlib — nenhuma dependência de teste fora das cinco já pinadas) mais
+`fixtures/*.sample.csv` **sintéticas** (não é dado da campanha real) que provam a esteira inteira
+funcionando ponta a ponta, do CSV ao `resumo.md` e aos PNGs.
+
+**`deploy/run-experiment.ps1`** — uma execução completa (reset → registro → carga/injeção →
+observação → rotulagem → teardown), orçamento de tempo **fixo** (não detecta onset ao vivo; quem
+decide onset é só o Labeler, depois, sobre o intervalo de Prometheus inteiro da execução — decisão
+tomada com o usuário: KISS/DRY, um único lugar de detecção, ao custo de alguns minutos de margem por
+execução). F3 abre `kubectl port-forward` próprio pra Payment.API (sem NodePort, D9). Checklist da
+tarefa 3a (energia/sleep/Windows Update/Docker Desktop) impresso e confirmado interativamente, com
+recusa automática se a máquina estiver na bateria. **`deploy/run-campaign.ps1`** gera o manifesto de
+60 execuções em blocos aleatorizados (`docs/experiments/campaign-manifest.csv`, seed gravado, nunca
+agrupado por braço — §3), reaproveita o manifesto se já existir (retomada de lote via
+`-StartFromRunOrder`), e chama `dump-knowledge.ps1` a cada bloco de 3 execuções (tarefa 3b — "o
+plano não tinha nenhum"). **Nenhum dos três scripts foi exercitado contra o cluster real nesta
+sessão** — só sintaxe validada (`Parser]::ParseFile`, os arquivos precisam de BOM UTF-8 pra
+PowerShell 5.1 não corromper acento/travessão, mesmo padrão que `bootstrap.ps1` já usava) e lidos
+linha a linha na revisão de código. Um bloqueante real de lógica foi achado e corrigido nessa
+revisão: `run-campaign.ps1` checava `$LASTEXITCODE` depois de invocar `run-experiment.ps1` via `&`,
+mas o script chamado sinaliza falha por `throw` (exceção terminante), não por código de saída — a
+checagem nunca dispararia; corrigido com `try`/`catch`.
+
+**O que fica para a sessão que rodar os pilotos:** validar o orçamento de `-DurationMinutes` (25 min
+é estimativa, não medição — §3 pede exatamente os 3 pilotos pra isso), validar
+`InjectionPhaseSeconds` contra o ciclo senoidal real do `Norn.LoadGenerator`, confirmar que o
+`exported_job` usado nas queries do Labeler bate com o que o Prometheus real grava, exercitar o
+reset do `plannerBackend` contra um `Norn.Worker` ao vivo (nunca chamado fora de teste nesta sessão),
+e observar de perto o risco residual do OOM×`RestartPod` descrito acima no primeiro F1 dos braços
+B/C. `norn:platform:config:forecast` não é resetado por `run-experiment.ps1` — assume-se o default
+desligado do ADR-16 (nenhuma sessão até agora ligou forecast no Worker ao vivo); e captura de
+temperatura/clock de CPU (`cpu_temp_max_celsius`/`cpu_clock_avg_mhz`) não foi implementada — os
+parâmetros existem no `Norn.Labeler label` mas ficam nulos até alguém cablear uma fonte (Windows não
+expõe temperatura de CPU sem WMI de terceiros ou admin).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)

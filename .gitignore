@@ -20,8 +20,14 @@ src/Platform/Norn.API/wwwroot/*
 
 # Python
 tools/analysis/.venv/
-tools/analysis/__pycache__/
+tools/analysis/**/__pycache__/
 *.pyc
+
+# Fase 12: dumps do Postgres e relatórios de carga por execução ficam fora do git de propósito
+# (§3, tarefa 3b — grandes, binários/específicos de execução; o que entra no git é o CSV do
+# Labeler). A campanha em si não roda dentro do repositório — os CSV consolidados de campanha
+# real vivem em tools/analysis/data/, versionados manualmente quando a campanha fechar.
+tools/analysis/data/load-reports/
 
 # Claude Code — settings.json é versionado (configuração de workspace), settings.local.json nunca é
 .claude/settings.local.json

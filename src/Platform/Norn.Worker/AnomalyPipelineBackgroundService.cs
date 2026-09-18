@@ -15,6 +15,7 @@ using Norn.Monitor;
 using Norn.Monitor.Prometheus;
 using Norn.Planner.LlmPlanning;
 using Norn.Worker.Events;
+using RuleEngineImpl = Norn.Planner.RuleEngine.RuleEngine;
 
 namespace Norn.Worker;
 
@@ -48,6 +49,7 @@ internal sealed partial class AnomalyPipelineBackgroundService(
     IPlatformConfig platformConfig,
     IFeatureFlags featureFlags,
     LlmPlanner llmPlanner,
+    RuleEngineImpl ruleEngine,
     HealingActionExecutor healingActionExecutor,
     ExecutorMetrics executorMetrics,
     PlatformEventPublisher eventPublisher,
@@ -263,7 +265,14 @@ internal sealed partial class AnomalyPipelineBackgroundService(
             using var scope = scopeFactory.CreateScope();
             var scopedKnowledgeStore = scope.ServiceProvider.GetRequiredService<IKnowledgeStore>();
 
-            var plan = await llmPlanner.DecideAsync(context, cancellationToken);
+            // Braço B (Llm) chama o LlmPlanner, que cai para o RuleEngine internamente em falha
+            // (§5.5) — a decisão do fallback continua contando como "decidido por Llm" na ITT.
+            // Braço C (RuleEngine) nunca chama o LLM: é a única forma de medir o RuleEngine como
+            // decisor de primeira linha, não só como rede de segurança (Fase 12, §3, H2).
+            var backend = await platformConfig.GetPlannerBackendAsync(cancellationToken);
+            var plan = backend == PlannerBackend.RuleEngine
+                ? ruleEngine.Decide(context)
+                : await llmPlanner.DecideAsync(context, cancellationToken);
             await scopedKnowledgeStore.SaveHealingPlanAsync(plan, cancellationToken);
             LogPlanCreated(logger, plan.PlanId, context.ContextId, plan.DecidedBy, plan.Actions.Count > 0 ? plan.Actions[0].Type : HealingActionType.NoOp);
             await eventPublisher.PublishAsync(PlatformEventTypes.PlanCreated, plan.CreatedAtUtc, context.ExperimentRunId, context.CorrelationId, plan, cancellationToken);

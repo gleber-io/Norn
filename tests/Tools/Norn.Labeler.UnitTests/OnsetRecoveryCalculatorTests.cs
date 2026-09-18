@@ -1,0 +1,137 @@
+using Norn.Labeler.Detection;
+using Shouldly;
+using Xunit;
+
+namespace Norn.Labeler.UnitTests;
+
+/// <summary>
+/// §3: onset é o primeiro instante em que a taxa de erro 5xx excede 1% por 30s consecutivos, ou
+/// ocorre OOMKilled — vale o que ocorrer primeiro. Recuperação é abaixo de 0,1% por 60s
+/// consecutivos, contada a partir do onset. F5 tem regra própria (âncora no kill, não no onset).
+/// </summary>
+public sealed class OnsetRecoveryCalculatorTests
+{
+    private static readonly DateTimeOffset Epoch = new(2026, 9, 17, 0, 0, 0, TimeSpan.Zero);
+
+    [Fact]
+    public void Calculate_ErrorRateSustainedThenRecovers_ReturnsRecoveredWithCorrectTimestamps()
+    {
+        var samples = new List<MetricSample>();
+        // 0-59s: saudável (0%). 60-95s: acima de 1% (36s sustentado — onset em 60s). Depois recupera.
+        AddRange(samples, Epoch, 0, 60, 5, 0.0);
+        AddRange(samples, Epoch.AddSeconds(60), 60, 100, 5, 5.0);
+        AddRange(samples, Epoch.AddSeconds(100), 100, 400, 5, 0.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F1", samples, oomKilledAtUtc: null, f5KillAtUtc: null);
+
+        result.TerminationState.ShouldBe(TerminationState.Recovered);
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+        // Recuperação exige 0,1% sustentado por 60s a partir de uma amostra abaixo do limiar — a
+        // primeira candidata é a amostra de 0% em t=100s (primeira depois do onset já saudável).
+        result.RecoveredAtUtc.ShouldBe(Epoch.AddSeconds(100));
+    }
+
+    [Fact]
+    public void Calculate_ErrorRateNeverSustainsThirtySeconds_ReturnsInvalidNoOnset()
+    {
+        var samples = new List<MetricSample>();
+        AddRange(samples, Epoch, 0, 60, 5, 0.0);
+        // Pico isolado de 10s (duas amostras de 5s) — não sustenta os 30s exigidos.
+        samples.Add(new MetricSample(Epoch.AddSeconds(60), 5.0));
+        samples.Add(new MetricSample(Epoch.AddSeconds(65), 5.0));
+        AddRange(samples, Epoch.AddSeconds(70), 70, 400, 5, 0.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F2", samples, oomKilledAtUtc: null, f5KillAtUtc: null);
+
+        result.TerminationState.ShouldBe(TerminationState.InvalidNoOnset);
+        result.OnsetAtUtc.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Calculate_OnsetNeverRecoversWithinWindow_ReturnsCensoredAtWindowEnd()
+    {
+        var samples = new List<MetricSample>();
+        AddRange(samples, Epoch, 0, 60, 5, 0.0);
+        // Erro alto sustentado por toda a janela de observação e além — nunca recupera.
+        AddRange(samples, Epoch.AddSeconds(60), 60, 900, 5, 5.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F1", samples, oomKilledAtUtc: null, f5KillAtUtc: null);
+
+        result.TerminationState.ShouldBe(TerminationState.CensoredAtWindowEnd);
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+        result.RecoveredAtUtc.ShouldBeNull();
+        result.WindowEndAtUtc.ShouldBe(Epoch.AddSeconds(60) + OnsetRecoveryCalculator.ObservationWindow);
+    }
+
+    [Fact]
+    public void Calculate_F1_OomKilledBeforeErrorRateOnset_UsesEarlierOomInstant()
+    {
+        var samples = new List<MetricSample>();
+        AddRange(samples, Epoch, 0, 120, 5, 0.0);
+        AddRange(samples, Epoch.AddSeconds(120), 120, 400, 5, 5.0); // onset por taxa de erro em t=120s
+        var oomKilledAt = Epoch.AddSeconds(40); // OOM ocorre bem antes
+
+        var result = OnsetRecoveryCalculator.Calculate("F1", samples, oomKilledAt, f5KillAtUtc: null);
+
+        result.OnsetAtUtc.ShouldBe(oomKilledAt);
+    }
+
+    [Fact]
+    public void Calculate_F1_ErrorRateOnsetBeforeOom_UsesEarlierErrorRateInstant()
+    {
+        var samples = new List<MetricSample>();
+        AddRange(samples, Epoch, 0, 60, 5, 0.0);
+        AddRange(samples, Epoch.AddSeconds(60), 60, 400, 5, 5.0); // onset por taxa de erro em t=60s
+        var oomKilledAt = Epoch.AddSeconds(200); // OOM ocorre bem depois
+
+        var result = OnsetRecoveryCalculator.Calculate("F1", samples, oomKilledAt, f5KillAtUtc: null);
+
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+    }
+
+    [Fact]
+    public void Calculate_F5WithKillInstant_AnchorsOnsetOnKillRegardlessOfErrorRate()
+    {
+        // F5 é kill abrupto: mesmo sem nenhuma amostra de erro sustentada, o kill é a âncora.
+        var samples = new List<MetricSample> { new(Epoch, 0.0) };
+        var killAt = Epoch.AddSeconds(10);
+
+        var result = OnsetRecoveryCalculator.Calculate("F5", samples, oomKilledAtUtc: null, killAt);
+
+        result.OnsetAtUtc.ShouldBe(killAt);
+        result.TerminationState.ShouldNotBe(TerminationState.InvalidNoOnset);
+    }
+
+    [Fact]
+    public void Calculate_F5WithoutKillInstant_ReturnsInvalidInstrumentation()
+    {
+        var samples = new List<MetricSample> { new(Epoch, 0.0) };
+
+        var result = OnsetRecoveryCalculator.Calculate("F5", samples, oomKilledAtUtc: null, f5KillAtUtc: null);
+
+        result.TerminationState.ShouldBe(TerminationState.InvalidInstrumentation);
+    }
+
+    [Fact]
+    public void Calculate_OnsetCrossingWithoutFutureCoverage_IsNotCountedAsOnset()
+    {
+        // O erro sobe no fim da série observada, sem 30s de amostras depois para confirmar
+        // sustentação — não pode contar como onset por falta de dado, não por comportamento real.
+        var samples = new List<MetricSample>();
+        AddRange(samples, Epoch, 0, 60, 5, 0.0);
+        samples.Add(new MetricSample(Epoch.AddSeconds(60), 5.0));
+        samples.Add(new MetricSample(Epoch.AddSeconds(65), 5.0));
+
+        var result = OnsetRecoveryCalculator.Calculate("F3", samples, oomKilledAtUtc: null, f5KillAtUtc: null);
+
+        result.TerminationState.ShouldBe(TerminationState.InvalidNoOnset);
+    }
+
+    private static void AddRange(List<MetricSample> samples, DateTimeOffset start, int fromSeconds, int toSeconds, int stepSeconds, double valuePct)
+    {
+        for (var t = fromSeconds; t < toSeconds; t += stepSeconds)
+        {
+            samples.Add(new MetricSample(start.AddSeconds(t - fromSeconds), valuePct));
+        }
+    }
+}

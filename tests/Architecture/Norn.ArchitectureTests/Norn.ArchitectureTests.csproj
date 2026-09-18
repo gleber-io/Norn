@@ -34,6 +34,8 @@
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Catalog.API\Norn.Shop.Catalog.API.csproj" />
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Order.API\Norn.Shop.Order.API.csproj" />
     <ProjectReference Include="..\..\..\src\Shop\Norn.Shop.Payment.API\Norn.Shop.Payment.API.csproj" />
+    <ProjectReference Include="..\..\..\tools\Norn.Labeler\Norn.Labeler.csproj" />
+    <ProjectReference Include="..\..\..\tools\Norn.PairedAnalysis\Norn.PairedAnalysis.csproj" />
   </ItemGroup>
 
 </Project>

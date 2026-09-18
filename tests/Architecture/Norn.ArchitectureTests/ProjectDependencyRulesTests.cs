@@ -25,6 +25,8 @@ public sealed class ProjectDependencyRulesTests
     private static readonly Assembly NornKnowledgeAssembly = typeof(Norn.Knowledge.KnowledgeDbContext).Assembly;
     private static readonly Assembly NornWorkerAssembly = typeof(Norn.Worker.Events.PlatformEventPublisher).Assembly;
     private static readonly Assembly NornApiAssembly = typeof(Norn.API.Hubs.NornHub).Assembly;
+    private static readonly Assembly NornLabelerAssembly = typeof(Norn.Labeler.Detection.OnsetRecoveryCalculator).Assembly;
+    private static readonly Assembly NornPairedAnalysisAssembly = typeof(Norn.PairedAnalysis.PairedDecisionCalculator).Assembly;
 
     public static TheoryData<Assembly> PlatformAssemblies => new()
     {
@@ -123,6 +125,37 @@ public sealed class ProjectDependencyRulesTests
         var result = Types.InAssembly(NornApiAssembly)
             .Should()
             .NotHaveDependencyOnAny("Norn.Monitor", "Norn.Analyzer", "Norn.Planner", "Norn.Executor", "Norn.Worker")
+            .GetResult();
+
+        result.IsSuccessful.ShouldBeTrue(string.Join(", ", result.FailingTypeNames ?? []));
+    }
+
+    /// <summary>
+    /// Exceção declarada do §4 (Fase 12): Norn.Labeler é composition root de campanha, referencia
+    /// Norn.Knowledge de propósito — mas continua fora do loop MAPE-K, sem acoplar a nenhum dos
+    /// projetos que o compõem.
+    /// </summary>
+    [Fact]
+    public void NornLabeler_Should_NotDependOn_MapeKProjects()
+    {
+        var result = Types.InAssembly(NornLabelerAssembly)
+            .Should()
+            .NotHaveDependencyOnAny("Norn.Monitor", "Norn.Analyzer", "Norn.Planner", "Norn.Executor", "Norn.Worker", "Norn.API")
+            .GetResult();
+
+        result.IsSuccessful.ShouldBeTrue(string.Join(", ", result.FailingTypeNames ?? []));
+    }
+
+    /// <summary>
+    /// Norn.PairedAnalysis (Fase 12, tarefa 4a) usa o RuleEngine só como função pura — nunca
+    /// referencia Norn.Knowledge (lê o Postgres com Npgsql cru, §4), diferente de Norn.Labeler.
+    /// </summary>
+    [Fact]
+    public void NornPairedAnalysis_Should_NotDependOn_NornKnowledge()
+    {
+        var result = Types.InAssembly(NornPairedAnalysisAssembly)
+            .Should()
+            .NotHaveDependencyOnAny("Norn.Knowledge", "Norn.Monitor", "Norn.Analyzer", "Norn.Executor", "Norn.Worker", "Norn.API")
             .GetResult();
 
         result.IsSuccessful.ShouldBeTrue(string.Join(", ", result.FailingTypeNames ?? []));

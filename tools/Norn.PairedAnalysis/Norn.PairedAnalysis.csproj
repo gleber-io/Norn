@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Norn.PairedAnalysis</RootNamespace>
+  </PropertyGroup>
+
+  <!-- §4 do Master Plan: Norn.PairedAnalysis → Norn.Contracts, Norn.Planner — nunca Norn.Knowledge.
+       Não é composition root da plataforma; lê o Postgres com Npgsql "puro" (não o provedor EF) e
+       usa o RuleEngine só como função pura (Fase 8, tarefa 1), sem DI nem adaptador algum. -->
+  <ItemGroup>
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="CsvHelper" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Platform\Norn.Contracts\Norn.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Platform\Norn.Planner\Norn.Planner.csproj" />
+  </ItemGroup>
+
+</Project>

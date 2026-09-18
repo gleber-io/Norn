@@ -7,8 +7,9 @@ using StackExchange.Redis;
 namespace Norn.Knowledge;
 
 /// <summary>
-/// Composição do adaptador Norn.Knowledge (ADR-17) — chamada apenas por Norn.Worker e Norn.API,
-/// os dois composition roots que podem referenciar este projeto (§4).
+/// Composição do adaptador Norn.Knowledge (ADR-17) — chamada por Norn.Worker e Norn.API, os dois
+/// composition roots do processo da plataforma, e por Norn.Labeler (Fase 12), composition root de
+/// campanha com a mesma exceção declarada no §4 do Master Plan.
 /// </summary>
 public static class KnowledgeServiceCollectionExtensions
 {
@@ -28,6 +29,7 @@ public static class KnowledgeServiceCollectionExtensions
         services.AddSingleton<ICooldownStore, RedisCooldownStore>();
         services.AddSingleton<IPlatformConfig, RedisPlatformConfig>();
         services.AddSingleton<IFeatureFlagWriter, RedisFeatureFlagWriter>();
+        services.AddScoped<IExperimentRunStore, ExperimentRunStore>();
         services.AddHostedService<PlatformConfigInvalidationSubscriber>();
 
         return services;

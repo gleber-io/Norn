@@ -117,4 +117,16 @@
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
   </ItemGroup>
 
+  <!-- Fase 12: Norn.Labeler e Norn.PairedAnalysis — ferramental de campanha (§4). Npgsql "puro"
+       (não o provedor EF) porque Norn.PairedAnalysis não referencia Norn.Knowledge (só Npgsql +
+       CsvHelper, tabela do §4) — versão igual à que Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3
+       já resolve transitivamente, para não ter duas versões do mesmo driver na solução. -->
+  <ItemGroup>
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <PackageVersion Include="CsvHelper" Version="33.1.0" />
+    <!-- Host.CreateApplicationBuilder para o composition root de Norn.Labeler (config + DI num só
+         pacote, em vez de referenciar Configuration/Json/EnvironmentVariables/DI separados). -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+  </ItemGroup>
+
 </Project>

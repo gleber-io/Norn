@@ -8,6 +8,18 @@ public enum PlatformMode
     Active,
 }
 
+/// <summary>
+/// Qual decisor o <c>Norn.Worker</c> usa no ciclo de planejamento (Fase 12, braços B/C — §3).
+/// <c>Llm</c> é o braço B (com fallback interno para <c>RuleEngine</c> em falha, §5.5); <c>RuleEngine</c>
+/// é o braço C, que nunca chama o LLM. Default <c>Llm</c> — preserva o comportamento de todas as
+/// sessões anteriores à Fase 12, que não tinham este switch.
+/// </summary>
+public enum PlannerBackend
+{
+    Llm,
+    RuleEngine,
+}
+
 public sealed record ForecastConfig
 {
     public bool Enabled { get; init; }
@@ -33,4 +45,10 @@ public interface IPlatformConfig
     /// consecutivas). Implementada por Norn.Knowledge (Fase 9).
     /// </summary>
     Task SetModeAsync(PlatformMode mode, CancellationToken cancellationToken);
+
+    /// <summary>Lido por Norn.Worker uma vez por ciclo (Fase 12) — decide entre chamar o LLM ou o RuleEngine puro.</summary>
+    Task<PlannerBackend> GetPlannerBackendAsync(CancellationToken cancellationToken);
+
+    /// <summary>Escrita do braço B/C (Fase 12, <c>run-experiment.ps1</c> no reset de estado, tarefa 2a).</summary>
+    Task SetPlannerBackendAsync(PlannerBackend backend, CancellationToken cancellationToken);
 }

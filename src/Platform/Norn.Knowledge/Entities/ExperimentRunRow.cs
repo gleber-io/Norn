@@ -24,7 +24,10 @@ public sealed class ExperimentRunRow
 
     public required double TargetRps { get; init; }
 
-    public double? AchievedRps { get; init; }
+    /// <summary>Colunas abaixo (até <see cref="GitCommitSha"/> exclusive) são preenchidas depois, por
+    /// <c>ExperimentRunStore.UpdateLabelingResultAsync</c> (Fase 12) — <c>set</c>, não <c>init</c>,
+    /// porque a linha já existe (criada no reset) quando o Labeler as calcula, depois do teardown.</summary>
+    public double? AchievedRps { get; set; }
 
     public required int ChaosSeed { get; init; }
 
@@ -50,23 +53,23 @@ public sealed class ExperimentRunRow
     public required DateTimeOffset StartedAtUtc { get; init; }
 
     /// <summary>Nulo se não houve onset; no F5, o instante do kill.</summary>
-    public DateTimeOffset? OnsetAtUtc { get; init; }
+    public DateTimeOffset? OnsetAtUtc { get; set; }
 
     /// <summary><c>onset + 10 min</c>.</summary>
-    public DateTimeOffset? WindowEndAtUtc { get; init; }
+    public DateTimeOffset? WindowEndAtUtc { get; set; }
 
     /// <summary>Nulo quando censurado.</summary>
-    public DateTimeOffset? RecoveredAtUtc { get; init; }
+    public DateTimeOffset? RecoveredAtUtc { get; set; }
 
     /// <summary>
     /// <c>Recovered</c> | <c>CensoredAtWindowEnd</c> | <c>InvalidNoOnset</c> | <c>InvalidInstrumentation</c> —
     /// a coluna que distingue censura de descarte.
     /// </summary>
-    public string? TerminationState { get; init; }
+    public string? TerminationState { get; set; }
 
-    public double? CpuTempMaxCelsius { get; init; }
+    public double? CpuTempMaxCelsius { get; set; }
 
-    public double? CpuClockAvgMhz { get; init; }
+    public double? CpuClockAvgMhz { get; set; }
 
     public required int WslMemoryGb { get; init; }
 

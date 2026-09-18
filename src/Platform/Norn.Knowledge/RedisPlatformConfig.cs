@@ -20,6 +20,7 @@ internal sealed partial class RedisPlatformConfig(
     internal const string KeyPrefix = "norn:platform:config:";
     internal const string ModeKey = "mode";
     internal const string ForecastKey = "forecast";
+    internal const string PlannerBackendKey = "plannerBackend";
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(5);
 
     public async Task<PlatformMode> GetModeAsync(CancellationToken cancellationToken)
@@ -77,6 +78,37 @@ internal sealed partial class RedisPlatformConfig(
 
         var subscriber = connectionMultiplexer.GetSubscriber();
         await subscriber.PublishAsync(RedisChannel.Literal(PlatformConfigInvalidationSubscriber.InvalidationChannel), ModeKey);
+    }
+
+    public async Task<PlannerBackend> GetPlannerBackendAsync(CancellationToken cancellationToken)
+    {
+        var cacheKey = CacheKey(PlannerBackendKey);
+        if (cache.TryGetValue(cacheKey, out PlannerBackend cached))
+        {
+            return cached;
+        }
+
+        var database = connectionMultiplexer.GetDatabase();
+        var value = await database.StringGetAsync(KeyPrefix + PlannerBackendKey);
+
+        // Sem intervenção, mantém o comportamento de todas as sessões anteriores à Fase 12: LLM
+        // com fallback interno para RuleEngine (§5.5), nunca RuleEngine forçado.
+        var backend = value.HasValue && Enum.TryParse<PlannerBackend>(value.ToString(), out var parsed)
+            ? parsed
+            : PlannerBackend.Llm;
+
+        Store(cacheKey, backend);
+        return backend;
+    }
+
+    /// <summary>Fase 12 — reset de estado do <c>run-experiment.ps1</c> antes de cada execução (tarefa 2a).</summary>
+    public async Task SetPlannerBackendAsync(PlannerBackend backend, CancellationToken cancellationToken)
+    {
+        var database = connectionMultiplexer.GetDatabase();
+        await database.StringSetAsync(KeyPrefix + PlannerBackendKey, backend.ToString());
+
+        var subscriber = connectionMultiplexer.GetSubscriber();
+        await subscriber.PublishAsync(RedisChannel.Literal(PlatformConfigInvalidationSubscriber.InvalidationChannel), PlannerBackendKey);
     }
 
     private void Store<T>(string cacheKey, T value)
