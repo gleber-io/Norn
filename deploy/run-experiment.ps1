@@ -203,9 +203,15 @@ $oomKilledAtUtc = "none"
 $f5KillAtUtc = "none"
 $cpuClockAvgMhz = $null
 $observationEndUtc = $null
+$injectionAtUtc = $null
 try {
     Step "Aguardando o instante de injeção (fase $InjectionPhaseSeconds s do ciclo)"
     Start-Sleep -Seconds $InjectionPhaseSeconds
+
+    # Capturado *antes* do POST — é o limite entre "alvo saudável" e "alvo sob caos" que o
+    # Labeler usa pra medir a capacidade do gerador só na janela em que isso é mensurável de
+    # verdade (achado ao vivo, 2º piloto F1/C — ver LoadReportReader.cs).
+    $injectionAtUtc = [DateTimeOffset]::UtcNow
 
     Step "Ativando caos: $Scenario (seed=$ChaosSeed) em $($target.Deployment)"
     $activateBody = @{ scenarioId = $Scenario; seed = $ChaosSeed } | ConvertTo-Json
@@ -337,6 +343,7 @@ $labelArgs = @(
     "--window-start-utc", $startedAtUtc.ToString("o"),
     "--observation-end-utc", $observationEndUtc.ToString("o"),
     "--load-report", $loadReportPath,
+    "--injection-at-utc", $injectionAtUtc.ToString("o"),
     "--oom-killed-at-utc", $oomKilledAtUtc,
     "--f5-kill-at-utc", $f5KillAtUtc
 )

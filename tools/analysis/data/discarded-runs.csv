@@ -1,2 +1,3 @@
 experiment_run_id,scenario,arm,repetition,reason,detail
 15b7b5d8-1335-4f64-bff2-137e5f17b809,F1,C,1,InvalidInstrumentation,achieved_rps=6.07 fora de ±10 % de target_rps=11.00
+dae2b5fd-bee1-4c21-9a19-47854a6b5e1e,F1,C,1,InvalidInstrumentation,achieved_rps=6.49 fora de ±10 % de target_rps=11.00

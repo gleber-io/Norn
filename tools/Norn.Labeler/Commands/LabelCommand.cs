@@ -30,6 +30,11 @@ public static class LabelCommand
         var observationEnd = ArgReader.GetRequiredDateTimeOffset(args, "--observation-end-utc");
         var loadReportPath = ArgReader.GetRequiredSetting(args, "--load-report");
 
+        // Achado ao vivo (2º piloto F1/C): a capacidade do gerador só é medível enquanto o alvo
+        // ainda está saudável — depois da injeção, uma razão baixa é o próprio cenário funcionando
+        // (LoadReportReader.cs tem o detalhe completo).
+        var injectionAtUtc = ArgReader.GetRequiredDateTimeOffset(args, "--injection-at-utc");
+
         // container_oom_events_total não é observável neste ambiente (docs/metrics-matrix.md) — o
         // instante do OOMKilled chega de fora, capturado pelo run-experiment.ps1 via kubectl logo
         // após o teardown, enquanto status.containerStatuses[].lastState ainda está fresco.
@@ -47,7 +52,7 @@ public static class LabelCommand
 
         var labeling = OnsetRecoveryCalculator.Calculate(scenario, errorRateSamples, oomKilledAtUtc, f5KillAtUtc);
 
-        var (achievedRatio, achievedRps) = LoadReportReader.Read(loadReportPath, targetRps);
+        var (achievedRatio, achievedRps) = LoadReportReader.Read(loadReportPath, targetRps, injectionAtUtc);
         var withinLoadTarget = LoadDeliveryChecker.IsWithinTarget(targetRps, achievedRps);
 
         // Carga fora de ±10% do alvo (§3) invalida a execução independentemente do que o onset e a
