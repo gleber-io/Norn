@@ -23,6 +23,12 @@
 .PARAMETER BackupAfterEachBlock
     Roda dump-knowledge.ps1 ao fim de cada bloco (3 execucoes) -- tarefa 3b, "o plano nao tinha
     nenhum". Default ligado: perder o Postgres custa refazer a campanha inteira.
+
+.PARAMETER SkipWorkerManagement
+    Nao sobe nem derruba um Norn.Worker -- use quando ja houver um rodando por fora (ex.: sessao de
+    depuracao). Sem isso, o campaign sobe um Worker proprio, unico para o lote inteiro inteiro (Fase
+    12, achado ao vivo: reiniciar o Worker a cada execucao perderia o warmup do detector, ~150s de
+    historico -- o Worker precisa sobreviver as 60 execucoes, so o estado no Redis muda por execucao).
 #>
 param(
     [int]$Repetitions = 5,
@@ -30,7 +36,8 @@ param(
     [int]$StartFromRunOrder = 1,
     [bool]$BackupAfterEachBlock = $true,
     [int]$DurationMinutes = 25,
-    [int]$InjectionPhaseSeconds = 300
+    [int]$InjectionPhaseSeconds = 300,
+    [switch]$SkipWorkerManagement
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,35 +103,67 @@ Write-Host "  [ ] Plano de alto desempenho, na tomada, IDE e navegador fechados"
 $confirmation = Read-Host "Os quatro itens acima estao confirmados para o lote inteiro? (s/n)"
 if ($confirmation -ne "s") { throw "Lote cancelado -- checklist da tarefa 3a nao confirmado." }
 
-# --- Execucao sequencial do lote ------------------------------------------------------------
-$blockCounter = 0
-foreach ($row in $pendingRows) {
-    Step "Execucao run_order=$($row.RunOrder): $($row.Scenario)/$($row.Arm), repeticao $($row.Repetition)"
-
-    # run-experiment.ps1 sinaliza falha por excecao terminante (throw), nunca por `exit <code>` --
-    # `$LASTEXITCODE` so reflete o ultimo comando nativo (kubectl/dotnet) rodado dentro dele, entao
-    # checa-lo aqui nunca pegaria a excecao de verdade (ela já teria propagado e derrubado o lote
-    # inteiro antes desta linha rodar). O catch e o unico jeito confiavel de dar a mensagem de
-    # retomada em vez de um stack trace cru.
-    try {
-        & (Join-Path $PSScriptRoot "run-experiment.ps1") `
-            -Scenario $row.Scenario `
-            -Arm $row.Arm `
-            -Repetition ([int]$row.Repetition) `
-            -RunOrder ([int]$row.RunOrder) `
-            -RandomizationSeed ([int]$row.RandomizationSeed) `
-            -DurationMinutes $DurationMinutes `
-            -InjectionPhaseSeconds $InjectionPhaseSeconds `
-            -SkipPreflightConfirmation
-    } catch {
-        throw "run-experiment.ps1 falhou em run_order=$($row.RunOrder) -- lote interrompido. Retome com -StartFromRunOrder $($row.RunOrder). Causa: $_"
+# --- Norn.Worker: um so processo para o lote inteiro (achado ao vivo, piloto F1/C) ---------
+$workerProcess = $null
+if (-not $SkipWorkerManagement) {
+    $existingWorker = Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" |
+        Where-Object { $_.CommandLine -like "*Norn.Worker*" }
+    if ($existingWorker) {
+        throw "Ja existe um processo Norn.Worker rodando (PID $($existingWorker.ProcessId)) -- pare-o antes, ou rode com -SkipWorkerManagement se for intencional. Dois Workers contra o mesmo Redis/Postgres disputariam a mesma decisao (ADR-04)."
     }
 
-    $blockCounter++
-    if ($BackupAfterEachBlock -and ($blockCounter % 3 -eq 0)) {
-        Step "Fim de bloco -- backup do Knowledge (tarefa 3b)"
-        & (Join-Path $PSScriptRoot "dump-knowledge.ps1")
+    Step "Subindo Norn.Worker (unico para os $($pendingRows.Count) execucoes deste lote)"
+    $workerLogPath = Join-Path $repoRoot "tools/analysis/data/worker-campaign.log"
+    New-Item -ItemType Directory -Force -Path (Split-Path $workerLogPath) | Out-Null
+    $workerProcess = Start-Process -FilePath "dotnet" -ArgumentList "run", "--project", "src/Platform/Norn.Worker" `
+        -WorkingDirectory $repoRoot -RedirectStandardOutput $workerLogPath -RedirectStandardError "$workerLogPath.err" `
+        -WindowStyle Hidden -PassThru
+
+    Step "Aguardando warmup do detector (~150s, historico minimo antes do primeiro cenario)"
+    Start-Sleep -Seconds 150
+
+    if ($workerProcess.HasExited) {
+        throw "Norn.Worker encerrou sozinho durante o warmup -- veja $workerLogPath antes de tentar de novo."
     }
 }
 
-Step "Lote concluido: $($pendingRows.Count) execucoes."
+try {
+    # --- Execucao sequencial do lote --------------------------------------------------------
+    $blockCounter = 0
+    foreach ($row in $pendingRows) {
+        Step "Execucao run_order=$($row.RunOrder): $($row.Scenario)/$($row.Arm), repeticao $($row.Repetition)"
+
+        # run-experiment.ps1 sinaliza falha por excecao terminante (throw), nunca por `exit <code>` --
+        # `$LASTEXITCODE` so reflete o ultimo comando nativo (kubectl/dotnet) rodado dentro dele, entao
+        # checa-lo aqui nunca pegaria a excecao de verdade (ela já teria propagado e derrubado o lote
+        # inteiro antes desta linha rodar). O catch e o unico jeito confiavel de dar a mensagem de
+        # retomada em vez de um stack trace cru.
+        try {
+            & (Join-Path $PSScriptRoot "run-experiment.ps1") `
+                -Scenario $row.Scenario `
+                -Arm $row.Arm `
+                -Repetition ([int]$row.Repetition) `
+                -RunOrder ([int]$row.RunOrder) `
+                -RandomizationSeed ([int]$row.RandomizationSeed) `
+                -DurationMinutes $DurationMinutes `
+                -InjectionPhaseSeconds $InjectionPhaseSeconds `
+                -SkipPreflightConfirmation
+        } catch {
+            throw "run-experiment.ps1 falhou em run_order=$($row.RunOrder) -- lote interrompido. Retome com -StartFromRunOrder $($row.RunOrder). Causa: $_"
+        }
+
+        $blockCounter++
+        if ($BackupAfterEachBlock -and ($blockCounter % 3 -eq 0)) {
+            Step "Fim de bloco -- backup do Knowledge (tarefa 3b)"
+            & (Join-Path $PSScriptRoot "dump-knowledge.ps1")
+        }
+    }
+
+    Step "Lote concluido: $($pendingRows.Count) execucoes."
+}
+finally {
+    if ($workerProcess -and -not $workerProcess.HasExited) {
+        Step "Encerrando Norn.Worker do lote"
+        Stop-Process -Id $workerProcess.Id -Force
+    }
+}

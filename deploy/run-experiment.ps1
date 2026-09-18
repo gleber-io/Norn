@@ -20,6 +20,12 @@
     o instante do OOMKilled é lido de `status.containerStatuses[].lastState.terminated` via kubectl
     logo após o teardown, enquanto o campo ainda está fresco, e repassado ao Labeler.
 
+    PRÉ-REQUISITO NÃO AUTOMATIZADO AQUI (achado ao vivo, piloto F1/C): este script reseta o braço
+    no Redis, mas não sobe um `Norn.Worker` — sem um rodando, nada decide nada, e o cenário fica sem
+    cura nenhuma reagindo (`run-campaign.ps1` já sobe um Worker próprio para o lote inteiro; para
+    rodar este script isolado, suba um `Norn.Worker` manualmente antes e deixe-o com warmup
+    completo, ~150s de histórico).
+
 .PARAMETER Scenario
     F1 | F2 | F3 | F5.
 
