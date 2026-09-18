@@ -28,6 +28,7 @@ tools/analysis/**/__pycache__/
 # Labeler). A campanha em si não roda dentro do repositório — os CSV consolidados de campanha
 # real vivem em tools/analysis/data/, versionados manualmente quando a campanha fechar.
 tools/analysis/data/load-reports/
+tools/analysis/data/*.log
 
 # Claude Code — settings.json é versionado (configuração de workspace), settings.local.json nunca é
 .claude/settings.local.json

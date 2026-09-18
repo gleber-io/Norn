@@ -188,76 +188,132 @@ if ($Scenario -eq "F3") {
     Start-Sleep -Seconds 3
 }
 
-Step "Aguardando o instante de injeção (fase $InjectionPhaseSeconds s do ciclo)"
-Start-Sleep -Seconds $InjectionPhaseSeconds
-
-Step "Ativando caos: $Scenario (seed=$ChaosSeed) em $($target.Deployment)"
-$activateBody = @{ scenarioId = $Scenario; seed = $ChaosSeed } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "$($target.AdminBaseUrl)/admin/chaos/activate" -Body $activateBody -ContentType "application/json" | Out-Null
-
-$f5KillAtUtc = "none"
-if ($Scenario -eq "F5") {
-    # O F5 é kill abrupto e (quase) instantâneo — o próprio injetor grava o instante em Redis.
-    Start-Sleep -Seconds 2
-    $firedAtUtc = docker exec norn-redis redis-cli HGET norn:chaos:active firedAtUtc
-    if ($firedAtUtc -and $firedAtUtc -ne "") { $f5KillAtUtc = $firedAtUtc }
-}
-
-$deadlineUtc = $startedAtUtc.AddMinutes($DurationMinutes)
-$pollIntervalSeconds = 5
+# Achado ao vivo (piloto F1/C, 18/09/2026): sem este try/finally, qualquer falha entre ativar o
+# caos e desativá-lo (inclusive um bug de sintaxe do PowerShell ao chamar kubectl) derrubava o
+# script inteiro e deixava o caos rodando de verdade contra o pod, sem ninguém desligar. O caos só
+# é ativado dentro deste bloco, e o finally roda sempre — sucesso ou exceção.
+$chaosActivated = $false
 $oomKilledAtUtc = "none"
-$cpuClockSamplesMhz = @()
+$f5KillAtUtc = "none"
+$cpuClockAvgMhz = $null
+$observationEndUtc = $null
+try {
+    Step "Aguardando o instante de injeção (fase $InjectionPhaseSeconds s do ciclo)"
+    Start-Sleep -Seconds $InjectionPhaseSeconds
 
-# Achado da revisão de código antes do commit: consultar `lastState.terminated` só uma vez no
-# teardown perde o evento sempre que o próprio Norn reage ao F1 com RestartPod (DeleteNamespacedPodAsync)
-# nos braços B/C — o Pod antigo, que sofreu o OOMKilled de verdade, some, e um Pod novo sem
-# histórico toma o lugar de `.items[0]`. Poll a cada 5s por todos os Pods do rótulo, guardando o
-# primeiro OOMKilled visto, reduz a janela de corrida de "toda a observação" para "um intervalo de
-# poll" — não elimina a corrida por completo (um restart mais rápido que 5s ainda pode escapar),
-# mas o caso comum (detecção + decisão do Norn levam dezenas de segundos, Fase 9) fica coberto. Uma
-# correção completa exigiria capturar o timestamp dentro do próprio Executor no instante da atuação
-# (fora do escopo desta sessão, só ferramental de campanha) — registrar como risco residual a
-# validar nos 3 pilotos do DoD da Fase 12.
-while ([DateTimeOffset]::UtcNow -lt $deadlineUtc) {
-    if ($Scenario -eq "F1" -and $oomKilledAtUtc -eq "none") {
-        $terminatedLines = kubectl get pods -l "app=$($target.Deployment)" -n norn-shop `
-            -o jsonpath='{range .items[*]}{.status.containerStatuses[0].lastState.terminated.reason}{"|"}{.status.containerStatuses[0].lastState.terminated.finishedAt}{"\n"}{end}' 2>$null
-        foreach ($line in ($terminatedLines -split "`n")) {
-            if ($line -match "^OOMKilled\|(.+)$") {
-                $oomKilledAtUtc = $Matches[1]
-                break
+    Step "Ativando caos: $Scenario (seed=$ChaosSeed) em $($target.Deployment)"
+    $activateBody = @{ scenarioId = $Scenario; seed = $ChaosSeed } | ConvertTo-Json
+    Invoke-RestMethod -Method Post -Uri "$($target.AdminBaseUrl)/admin/chaos/activate" -Body $activateBody -ContentType "application/json" | Out-Null
+    $chaosActivated = $true
+
+    if ($Scenario -eq "F5") {
+        # O F5 é kill abrupto e (quase) instantâneo — o próprio injetor grava o instante em Redis.
+        Start-Sleep -Seconds 2
+        $firedAtUtc = docker exec norn-redis redis-cli HGET norn:chaos:active firedAtUtc
+        if ($firedAtUtc -and $firedAtUtc -ne "") { $f5KillAtUtc = $firedAtUtc }
+    }
+
+    $deadlineUtc = $startedAtUtc.AddMinutes($DurationMinutes)
+    $pollIntervalSeconds = 5
+    $cpuClockSamplesMhz = @()
+
+    # Achado da revisão de código antes do commit: consultar `lastState.terminated` só uma vez no
+    # teardown perde o evento sempre que o próprio Norn reage ao F1 com RestartPod (DeleteNamespacedPodAsync)
+    # nos braços B/C — o Pod antigo, que sofreu o OOMKilled de verdade, some, e um Pod novo sem
+    # histórico toma o lugar de `.items[0]`. Poll a cada 5s por todos os Pods do rótulo, guardando o
+    # primeiro OOMKilled visto, reduz a janela de corrida de "toda a observação" para "um intervalo de
+    # poll" — não elimina a corrida por completo (um restart mais rápido que 5s ainda pode escapar),
+    # mas o caso comum (detecção + decisão do Norn levam dezenas de segundos, Fase 9) fica coberto. Uma
+    # correção completa exigiria capturar o timestamp dentro do próprio Executor no instante da atuação
+    # (fora do escopo desta sessão, só ferramental de campanha) — registrar como risco residual a
+    # validar nos 3 pilotos do DoD da Fase 12.
+    #
+    # `-o json` + ConvertFrom-Json, não `-o jsonpath` — achado ao vivo (piloto F1/C): o PowerShell
+    # (mesmo 7.x) reescreve os argumentos passados a um executável nativo, e as aspas literais que
+    # o jsonpath exige em `{"|"}`/`{"\n"}` (separador de campo) chegam ao kubectl sem aspas —
+    # "unrecognized character in action: U+007C '|'". JSON estruturado não depende de nenhuma
+    # aspa sobrevivendo a essa reescrita.
+    while ([DateTimeOffset]::UtcNow -lt $deadlineUtc) {
+        if ($Scenario -eq "F1" -and $oomKilledAtUtc -eq "none") {
+            $podsJson = kubectl get pods -l "app=$($target.Deployment)" -n norn-shop -o json 2>$null
+            if ($podsJson) {
+                try {
+                    $pods = ($podsJson | ConvertFrom-Json).items
+                    foreach ($pod in $pods) {
+                        $terminated = $pod.status.containerStatuses[0].lastState.terminated
+                        if ($terminated -and $terminated.reason -eq "OOMKilled") {
+                            $oomKilledAtUtc = $terminated.finishedAt
+                            break
+                        }
+                    }
+                } catch { }
+            }
+        }
+
+        # Clock médio de CPU (§3, DoD da Fase 12: "throttling térmico como covariável, não como
+        # ruído") -- amostrado no mesmo poll, sem custo extra de espera. Temperatura fica sem
+        # captura nesta sessão: o Windows não expõe isso sem WMI de terceiros (LibreHardwareMonitor)
+        # ou admin.
+        try {
+            $clock = (Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1).CurrentClockSpeed
+            if ($clock) { $cpuClockSamplesMhz += $clock }
+        } catch { }
+
+        $sleepSeconds = [math]::Min($pollIntervalSeconds, ($deadlineUtc - [DateTimeOffset]::UtcNow).TotalSeconds)
+        if ($sleepSeconds -gt 0) { Start-Sleep -Seconds $sleepSeconds }
+    }
+
+    $cpuClockAvgMhz = if ($cpuClockSamplesMhz.Count -gt 0) { ($cpuClockSamplesMhz | Measure-Object -Average).Average } else { $null }
+    $observationEndUtc = [DateTimeOffset]::UtcNow
+}
+finally {
+    # Roda sempre — sucesso ou exceção. Nunca deixa o caos ativo de verdade contra um pod real.
+    if ($chaosActivated) {
+        Step "Desativando caos (finally — garante que roda mesmo se algo acima falhar)"
+        $deactivated = $false
+        for ($attempt = 1; $attempt -le 3 -and -not $deactivated; $attempt++) {
+            try {
+                Invoke-RestMethod -Method Post -Uri "$($target.AdminBaseUrl)/admin/chaos/deactivate" -ErrorAction Stop -TimeoutSec 10 | Out-Null
+                $deactivated = $true
+            } catch {
+                Write-Warning "Tentativa $attempt de desativar caos via HTTP falhou (pod pode estar em crash loop): $_"
+                if ($attempt -lt 3) { Start-Sleep -Seconds 5 }
+            }
+        }
+
+        if (-not $deactivated) {
+            # Achado ao vivo (piloto F1/C, 18/09/2026): o pod pode estar inacessível bem na hora do
+            # teardown (crash loop pelo próprio F1) — o deactivate via HTTP falha em silêncio e o
+            # caos fica preso ativo no Redis indefinidamente, contaminando toda execução seguinte
+            # de uma campanha desacompanhada. Fallback: limpar a chave direto, bypassando o HTTP.
+            # `norn:chaos:active` é slot único e global (um cenário ativo por vez, confirmado pelo
+            # schema do hash) — DEL é desativação completa, não específica de serviço.
+            Write-Warning "Desativação via HTTP falhou 3x — limpando norn:chaos:active direto no Redis."
+            try {
+                docker exec norn-redis redis-cli DEL norn:chaos:active | Out-Null
+            } catch {
+                Write-Warning "Fallback via Redis também falhou — INTERVENÇÃO MANUAL NECESSÁRIA: docker exec norn-redis redis-cli DEL norn:chaos:active"
             }
         }
     }
 
-    # Clock médio de CPU (§3, DoD da Fase 12: "throttling térmico como covariável, não como
-    # ruído") -- amostrado no mesmo poll, sem custo extra de espera. Temperatura fica sem captura
-    # nesta sessão: o Windows não expõe isso sem WMI de terceiros (LibreHardwareMonitor) ou admin.
+    Step "Parando Norn.LoadGenerator"
     try {
-        $clock = (Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1).CurrentClockSpeed
-        if ($clock) { $cpuClockSamplesMhz += $clock }
+        Wait-Job $loadGenJob -Timeout 120 | Out-Null
+        Receive-Job $loadGenJob | Write-Host
+        Remove-Job $loadGenJob -Force
     } catch { }
 
-    $sleepSeconds = [math]::Min($pollIntervalSeconds, ($deadlineUtc - [DateTimeOffset]::UtcNow).TotalSeconds)
-    if ($sleepSeconds -gt 0) { Start-Sleep -Seconds $sleepSeconds }
+    if ($portForwardJob) {
+        try {
+            Stop-Job $portForwardJob | Out-Null
+            Remove-Job $portForwardJob -Force
+        } catch { }
+    }
 }
 
-$cpuClockAvgMhz = if ($cpuClockSamplesMhz.Count -gt 0) { ($cpuClockSamplesMhz | Measure-Object -Average).Average } else { $null }
-
-# --- Teardown --------------------------------------------------------------------------
-$observationEndUtc = [DateTimeOffset]::UtcNow
-
-Step "Desativando caos"
-Invoke-RestMethod -Method Post -Uri "$($target.AdminBaseUrl)/admin/chaos/deactivate" | Out-Null
-
-Step "Parando Norn.LoadGenerator"
-Wait-Job $loadGenJob -Timeout 120 | Out-Null
-Receive-Job $loadGenJob | Write-Host
-Remove-Job $loadGenJob -Force
-
-if ($portForwardJob) {
-    Stop-Job $portForwardJob | Out-Null
-    Remove-Job $portForwardJob -Force
+if (-not $observationEndUtc) {
+    throw "Execução interrompida antes do fim da observação — caos e jobs já desligados (finally), mas sem dado para rotular. Descarte esta tentativa e refaça."
 }
 
 # --- Rotulagem (tarefa 1) ----------------------------------------------------------------

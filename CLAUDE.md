@@ -1030,12 +1030,75 @@ imprime `9,90` em vez de `9.90` no log de diagnóstico (não afeta o CSV nem o P
 Linha de teste removida do Postgres real depois (`DELETE FROM experiment_runs WHERE ...`), estado da
 plataforma revertido pra `Observe` (padrão seguro, ADR-05) ao final.
 
-**O que ainda fica para a sessão que rodar os pilotos de verdade:** validar o orçamento de
-`-DurationMinutes` (25 min é estimativa, não medição — §3 pede exatamente os 3 pilotos pra isso),
-validar `InjectionPhaseSeconds` contra o ciclo senoidal real do `Norn.LoadGenerator`, exercitar o
-`plannerBackend` contra um `Norn.Worker` de verdade rodando o loop (hoje só o adaptador foi
-confirmado, não o consumo em runtime), e observar de perto o risco residual do OOM×`RestartPod`
-(poll de 5s ainda pode perder um `RestartPod` mais rápido que isso) no primeiro F1 dos braços B/C.
+**Primeiro piloto real (F1/braço C) tentado na mesma sessão — não fechou como dado de campanha
+válido (`InvalidInstrumentation`), mas validou o ferramental inteiro ao vivo e achou dois bugs reais
+mais um gap operacional sério, todos corrigidos.**
+
+**Achado operacional, achado antes de qualquer execução:** `run-experiment.ps1` reseta o braço no
+Redis (`mode`/`plannerBackend`), mas **nunca sobe um `Norn.Worker`** — os dois primeiros disparos do
+piloto rodaram sem ninguém decidindo nada, só o kubelet reiniciando o Catalog sozinho em
+`CrashLoopBackOff` (achado só depois de o F1 já estar ativo de verdade). Corrigido operacionalmente
+nesta sessão subindo um `Norn.Worker` à parte antes do terceiro disparo — **os scripts continuam
+sem subir o Worker automaticamente**, isso é responsabilidade de quem roda a campanha (documentar
+no procedimento da campanha, não corrigido em código nesta sessão).
+
+**Dois bugs reais de código achados e corrigidos em `run-experiment.ps1`, ao vivo:**
+1. **jsonpath do poll de OOM quebrava sempre.** `-o jsonpath='...{"|"}...'` chegava ao `kubectl` sem
+   as aspas literais que o separador exige (`unrecognized character in action: U+007C '|'`) — o
+   PowerShell reescreve argumentos passados a executáveis nativos e não preserva aspas embutidas de
+   forma confiável, nem no 7.x. **A primeira tentativa do piloto quebrou exatamente nesse ponto, e
+   como não havia rede de segurança, o F1 ficou ativo de verdade contra o Catalog sem ninguém
+   desligar** — intervenção manual (deactivate + limpeza direta do Redis) evitou o pod estourar o
+   limite de memória. Corrigido trocando `-o jsonpath` por `-o json` + `ConvertFrom-Json` (sem
+   nenhuma aspa sobrevivendo a reescrita nenhuma).
+2. **Sem `try`/`finally` em volta de ativar-observar-desativar o caos**, qualquer falha no meio
+   (inclusive o bug 1) derrubava o script inteiro antes de chegar no "Desativando caos". Corrigido
+   envolvendo ativação+poll+observação num bloco `try` com um `finally` que sempre roda: desativa
+   caos, para o LoadGenerator, para o port-forward — não importa o que aconteça acima.
+3. **Achado só na segunda tentativa real (depois do fix 1 e 2): o próprio `finally` podia falhar em
+   silêncio.** O deactivate via HTTP não tem como funcionar se o pod-alvo estiver em crash loop bem
+   naquele instante — e foi exatamente o que aconteceu: o F1 ficou "preso" ativo no Redis por mais
+   de 30 min depois do script já ter terminado (confirmado via `HGETALL norn:chaos:active` direto),
+   contaminando o pod novo que o `RestartPod` tinha acabado de criar. Corrigido com 3 tentativas de
+   HTTP (5s entre elas) e, se todas falharem, um fallback que limpa a chave direto no Redis
+   (`DEL norn:chaos:active` — slot único e global, confirmado pelo schema do hash). **Isto é crítico
+   para a campanha de 60 execuções desacompanhada: sem o fallback, uma única falha de rede/pod no
+   teardown contaminaria todas as execuções seguintes do lote.**
+
+**O que o piloto confirmou funcionando de verdade, ao vivo, com o `Norn.Worker` no ar:**
+- `RestartPod` decidido pelo `RuleEngine` (braço C) disparou de verdade contra o Catalog — pod
+  antigo apagado, pod novo criado (`DeleteNamespacedPodAsync` real, não simulado).
+- `ScaleUp` disparou duas vezes pro Order.API sob carga real do `LoadGenerator` (não caos sintético)
+  — uma fechou `Succeeded`/`SloRestored=true`, confirmando o DoD da Fase 9 de novo, agora com o
+  ferramental novo da Fase 12 no meio.
+- `ToggleFeatureFlag` disparou pro Payment.API sob degradação real do gateway sob a mesma carga.
+- **F1 se manifesta de duas formas distintas neste ambiente, achado novo:** às vezes como
+  `OOMKilled` de verdade do kernel (`exitCode 137`, restart in-place no mesmo Pod — exatamente o
+  caso que o poll de 5s existe para capturar) e às vezes como `System.OutOfMemoryException` **dentro
+  do processo gerenciado** (heap do .NET, não cgroup) — o processo passa a falhar os health probes,
+  o kubelet mata por `reason: Error` (não `OOMKilled`), e a detecção de onset via `OOMKilled` nunca
+  dispararia para esse caso especificamente (a taxa de 5xx continua sendo o caminho que fecha o
+  onset ali, exatamente como o §3 previu com "o que ocorrer primeiro").
+- **Memória retida pelo F1 não é liberada só por desativar** (achado já documentado
+  historicamente, reconfirmado aqui com causa mais precisa): mesmo depois do Redis confirmadamente
+  limpo, um pod novo ainda nasceu em ~350-365Mi e não baixou sozinho — só um ciclo completo
+  (`kubectl scale --replicas=0` seguido de `--replicas=1`) devolveu o baseline limpo (~68Mi).
+  `kubectl delete pod` direto continua negado por permissão (mesmo padrão de sempre); o ciclo de
+  escala é o contorno que funciona.
+- **A execução em si terminou `InvalidInstrumentation`** (`achieved_rps=6.07` contra
+  `target_rps=11.00`, fora de ±10%) — esperado e correto: a máquina tinha `Norn.Worker` +
+  `Norn.LoadGenerator` + múltiplos ciclos de restart de pod rodando ao mesmo tempo, then contenção
+  de CPU real no host, exatamente o cenário que o §3 já avisava ("gerador sem CPU oferece menos
+  requisições que o alvo"). Não é falha do Labeler — é o Labeler descartando corretamente uma
+  execução que não teria dado dado confiável. Confirma que o `Norn.Worker` **precisa rodar num
+  processo dedicado**, sem outras cargas de trabalho pesadas concorrentes, durante a campanha real.
+
+**O que ainda fica para a sessão que fechar os pilotos de verdade:** repetir o piloto de F1/C (e
+os outros cenários/braços) com a máquina dedicada só ao `Norn.Worker`+`LoadGenerator` (sem builds,
+sem múltiplos ciclos de restart manual concorrentes) pra conseguir uma execução `Recovered` ou
+`CensoredAtWindowEnd` de verdade; validar `-DurationMinutes`/`InjectionPhaseSeconds` com dado real;
+decidir se subir o `Norn.Worker` deve entrar no próprio `run-experiment.ps1`/`run-campaign.ps1`
+(hoje é responsabilidade manual de quem roda) — decisão de design, não assumida aqui.
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
