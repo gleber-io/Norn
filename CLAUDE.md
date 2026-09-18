@@ -1139,11 +1139,40 @@ execuções, não faz parte do `run-experiment.ps1` (que já reseta réplicas no
 execução) — mas quem for rodar os 60 execuções da campanha real deve esperar precisar disso entre
 blocos, não é uma falha nova a cada vez.
 
-**O que ainda fica para fechar os pilotos do DoD da Fase 12:** rodar os outros dois pilotos exigidos
-(cenários/braços diferentes de F1/C) para calibrar `-DurationMinutes`/`InjectionPhaseSeconds` com
-mais de um ponto de dado; decidir se o ciclo de `kubectl scale 0→1` do Catalog entre execuções vale
-a pena automatizar dentro do `run-campaign.ps1` (hoje é manual, e a campanha real vai precisar disso
-repetidamente).
+**Segundo piloto (F5/braço C, controle negativo) rodado na mesma sessão — segundo dado de campanha
+válido, e um achado real e sério sobre o `RuleEngine`.** Kill abrupto disparou de verdade (`firedAtUtc`
+capturado ~0,8s depois da ativação, via `norn:chaos:active` no Redis — primeira validação ao vivo
+desse caminho). `termination_state=Recovered` (~7 min até o SLO voltar, dentro da janela de 10 min),
+`achieved_rps=11.02` — a correção da capacidade do gerador se generaliza para outro cenário.
+
+**Achado sério, exatamente o que o F5 existe para revelar (§3: "qualquer ação executada é o
+achado"):** o kill+recriação do pod do Catalog gerou dois falsos positivos reais.
+1. **`RestartPod` decidido para o próprio Catalog** (RSS/GC do pod recém-recriado, ruído de
+   startup/JIT interpretado como assinatura de F1) — auto-consistente (alvo e ação batem no mesmo
+   serviço), mas ainda um falso positivo: o controle negativo não deveria produzir nenhuma ação.
+2. **Mais grave — `ToggleFeatureFlag` decidido a partir de um sinal do Catalog, mas aplicado na
+   flag do Payment.** A assinatura de F3 do `RuleEngine`
+   (`ErrorRate5xx = "http_server_request_duration_seconds_count"`) é um **nome de métrica
+   genérico**, emitido por Catalog/Order/Payment igualmente — o `RuleEngine.DecideActionType` só
+   enxerga o conjunto de nomes de métrica alterados, nunca qual serviço os emitiu. Um blip de 5xx do
+   Catalog (efeito colateral do próprio kill/restart do F5) bateu na mesma branch que decide
+   `ToggleFeatureFlag`, e a ação resultante **sempre** escreve na chave fixa
+   `shop:flags:payment.gateway.bypass` (`ShopFlagCatalog.PaymentGatewayBypass`), **mesmo com
+   `target.service = "Norn.Shop.Catalog.API"`** no `HealingAction` persistido — nenhuma barreira do
+   Executor bloqueou por incompatibilidade de serviço. **Confirmado ao vivo**: a flag
+   `shop:flags:payment.gateway.bypass` estava `True` de verdade no Redis depois da execução —
+   ligada por um sinal que não tinha nada a ver com o Payment. Resetada manualmente para `false`
+   depois de confirmado (não fazia parte do DoD desta sessão corrigir o `RuleEngine` — é uma decisão
+   de escopo maior, precisaria de um jeito de amarrar a ação de cura ao serviço do contexto que a
+   originou, provavelmente em `HealingActionPreconditionChecker` ou na montagem do `HealingAction`
+   dentro de `RuleEngine.Decide`, não só em `DecideActionType`).
+
+**O que ainda fica para fechar os pilotos do DoD da Fase 12:** um terceiro piloto num cenário/braço
+ainda não tentado (F2 ou F3, e o braço B/LLM) para completar a diversidade dos 3 exigidos; decidir
+se e como corrigir o gap do `ToggleFeatureFlag` sem escopo de serviço (achado acima — decisão do
+usuário, não assumida aqui); decidir se o ciclo de `kubectl scale 0→1` do Catalog entre execuções
+vale a pena automatizar dentro do `run-campaign.ps1` (hoje é manual, e a campanha real vai precisar
+disso repetidamente).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
