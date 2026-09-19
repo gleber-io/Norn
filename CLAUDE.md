@@ -1191,11 +1191,73 @@ contra o cluster ainda** (o achado original só foi confirmado num piloto real; 
 exigiria repetir o piloto F5 com a correção no ar e confirmar que a flag do Payment não liga mais
 por sinal do Catalog).
 
-**O que ainda fica para fechar os pilotos do DoD da Fase 12:** um terceiro piloto num cenário/braço
-ainda não tentado (F2 ou F3, e o braço B/LLM) para completar a diversidade dos 3 exigidos; decidir
-se o ciclo de `kubectl scale 0→1` do Catalog entre execuções vale a pena automatizar dentro do
+**Terceiro piloto (F3/braço B, LLM) — feito, sessão de acompanhamento seguinte. Diversidade dos 3
+pilotos do DoD da Fase 12 completa** (F1/C, F5/C, F3/B). Ambiente recuperado do zero primeiro
+(Docker Desktop não subiu sozinho — mesmo achado de sempre, `Start-Process` resolveu; `k3d cluster
+stop`/`start` reinjetou `host.k3d.internal`, os três pods do Shop se recuperaram sozinhos).
+
+**Duas tentativas falharam antes da terceira fechar — os dois bugs eram reais, não flakiness, e os
+dois foram corrigidos em `run-experiment.ps1`:**
+1. **Porta errada no port-forward do F3** — `kubectl port-forward svc/payment-api 8082:8080`
+   usava a porta do **container** (`targetPort`), não a porta do **Service** (`port: 80`,
+   confirmado com `kubectl get svc -o yaml`). Isso nunca teve chance de funcionar — falha na hora
+   com "Service payment-api does not have a service port 8080", em qualquer tentativa, independente
+   de tempo de espera. A 1ª tentativa mascarou a causa como "timing" (o `Start-Sleep -Seconds 3` fixo
+   parecia curto demais) e o script abortou fora do `try/finally` que protege o teardown, sem limpar
+   nada. Corrigido: porta certa (`8082:80`), um poll ativo de prontidão contra `/health/live` no
+   lugar do sleep fixo, retry de 3 tentativas na própria ativação (mesmo padrão que a desativação já
+   tinha), e o bloco inteiro movido para **dentro** do `try/finally` existente — uma falha aí agora
+   passa pela mesma limpeza (para o `LoadGenerator`, remove os jobs) em vez de abortar o script cru.
+2. **Toda chamada ao Ollama nas duas primeiras tentativas deu timeout (10s configurados).** A
+   primeira chamada real depois de a máquina reiniciar carrega o modelo na GPU (~15s, medido ao
+   vivo) antes de sequer avaliar o prompt — mais que o `OllamaTimeout` de
+   `Norn.Worker/appsettings.json`. Sem aquecer antes, toda decisão do braço B caía no fallback do
+   `RuleEngine`, nunca testando o LLM de verdade (uma vez quente, um prompt do tamanho real do
+   `AnomalyContext` roda em ~2s — não é lentidão do modelo, é só o carregamento a frio). Corrigido
+   com um `ollama run norn-qwen "..."` best-effort no início do script, só quando `-Arm B`.
+
+**Com as duas correções, a 3ª tentativa completou do início ao fim sem crash e sem processo
+órfão** (confirmado via `Get-CimInstance Win32_Process` antes/depois — nenhum `kubectl.exe`/
+`Norn.LoadGenerator` sobrando). `DecidedBy: Llm` em **todas** as decisões da janela — o braço B foi
+genuinamente exercitado pela primeira vez ao vivo dentro do laço completo (não isolado como na
+Fase 8). F3 disparou sinais reais `norn_shop_payments_gateway_latency_ms` severidade Critical no
+Payment. `achieved_rps=10.96` (alvo 11 — dentro da margem). Terminou `InvalidNoOnset`, registrado em
+`discarded-runs.csv`: **achado metodológico novo** — o onset do Labeler é ancorado em taxa de 5xx
+sustentada (ou `OOMKilled`, só para F1), mas o F3 é degradação de **latência**, não
+necessariamente de taxa de erro — sob o gateway simulado lento, as requisições continuam
+retornando sucesso, só mais devagar, então o critério atual de onset pode nunca cruzar o limiar
+para este cenário específico. Não corrigido nesta sessão (tocaria `OnsetRecoveryCalculator`,
+decisão de escopo maior — precisa de um critério de latência sustentada, análogo ao de 5xx, não
+só mais um ajuste de configuração).
+
+**Achado sobre H2, reforça o da Fase 8 com dado ao vivo novo:** com sinal Critical real de F3 no
+Payment, o LLM decidiu `ScaleUp` (duas vezes) e `NoOp` (uma vez) — **nunca `ToggleFeatureFlag`**,
+mesmo sob severidade Critical sustentada. `ScaleUp` não tem relação nenhuma com o problema real
+(gateway simulado lento, não falta de capacidade) — mais uma divergência concreta entre o
+raciocínio do LLM e a ação de referência do cenário, complementando o achado da Fase 8 (que já
+mostrava o LLM preferindo `NoOp` a `ToggleFeatureFlag` para F3, ali por causa da ausência de
+`pod`/`podUid` no contexto).
+
+**Fix do `ToggleFeatureFlag` sem escopo de serviço — ainda não validado ao vivo.** Como
+`ToggleFeatureFlag` nunca foi candidato nesta execução (nem pelo LLM, que nunca escolheu, nem pelo
+`RuleEngine`, que nunca decidiu porque o LLM nunca falhou desta vez), a pré-condição de escopo
+continua coberta só por teste unitário. Validar isso ao vivo exigiria ou um piloto de braço C para
+F3 (onde o `RuleEngine` decide `ToggleFeatureFlag` de forma determinística e confiável para essa
+assinatura) ou engenharia deliberada de um sinal cross-service como o do piloto F5 — nenhum dos
+dois tentado aqui.
+
+**Ambiente ao fim desta sessão:** F3 desativado, port-forward encerrado, `shop:flags:` zeradas,
+`mode=Observe`, réplicas de volta a 1 em cada serviço do Shop, `Norn.Worker` local encerrado.
+Docker Desktop/infra/cluster deixados de pé (reaproveitados de uma sessão anterior, não
+provisionados nesta).
+
+**O que ainda fica para fechar os pilotos do DoD da Fase 12:** decidir se o ciclo de
+`kubectl scale 0→1` do Catalog entre execuções vale a pena automatizar dentro do
 `run-campaign.ps1` (hoje é manual, e a campanha real vai precisar disso repetidamente); validar ao
-vivo a correção do `ToggleFeatureFlag` acima (só testada por unitário até aqui).
+vivo o fix do `ToggleFeatureFlag` (achado acima); decidir se/como estender o critério de onset do
+Labeler para cobrir degradação de latência sem taxa de erro (achado do F3 acima) antes de rodar a
+campanha completa, já que hoje qualquer execução de F3 corre risco real de sair `InvalidNoOnset`
+mesmo com o cenário funcionando como projetado.
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
