@@ -408,9 +408,42 @@ if ($LASTEXITCODE -ne 0) { throw "Norn.Labeler label falhou" }
 
 # --- Teardown final: ambiente limpo para a próxima execução -------------------------------
 Step "Restaurando réplicas ao baseline"
-foreach ($deployment in @("catalog-api", "order-api", "payment-api")) {
+# catalog-api fica fora deste loop genérico — o bloco abaixo escala ele a 0 e de volta a 1, então
+# uma chamada de --replicas=1 aqui seria descartada 1 linha depois sem efeito nenhum (achado do
+# code-reviewer antes do commit).
+foreach ($deployment in @("order-api", "payment-api")) {
     kubectl scale "deployment/$deployment" -n norn-shop --replicas=1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "kubectl scale $deployment --replicas=1 falhou (teardown)" }
 }
+
+# Achado ao vivo (pilotos F1/C e F5/C, Fase 12): depois de um RestartPod/OOM real, o pod novo do
+# Catalog nasce com memória residual alta (herdada do efeito de retenção do F1, que não libera
+# memória só por desativar o caos) e entra em CrashLoopBackOff — só um ciclo completo de escala
+# 0→1 devolve o baseline limpo (~70Mi); `kubectl delete pod` direto continua negado por permissão.
+# Incondicional (não só depois de F1/F5): o custo (~10-20s) é desprezível contra os 25 min de uma
+# execução e as ~20h da campanha, e evita qualquer caso futuro em que outro cenário acabe
+# reiniciando o Catalog por um caminho diferente.
+Step "Ciclo de escala 0→1 do Catalog — garante memória residual limpa para a próxima execução"
+kubectl scale deployment/catalog-api -n norn-shop --replicas=0 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "kubectl scale catalog-api --replicas=0 falhou (teardown)" }
+
+# `kubectl rollout status` foi desenhado pra rollout de template (ReplicaSet novo substituindo o
+# antigo), não pra escala dentro do mesmo ReplicaSet — pode reportar sucesso antes do pod velho
+# sair de verdade (achado do code-reviewer antes do commit). Poll direto do Pod, mesmo padrão de
+# `-o json` já usado no poll de OOMKilled acima, confirma a remoção sem depender dessa semântica.
+# 12 tentativas de 5s = 60s, mesmo orçamento que o rollout status teria usado.
+$catalogGone = $false
+for ($i = 0; $i -lt 12 -and -not $catalogGone; $i++) {
+    $remaining = kubectl get pods -l app=catalog-api -n norn-shop -o json 2>$null | ConvertFrom-Json
+    if (-not $remaining -or $remaining.items.Count -eq 0) { $catalogGone = $true } else { Start-Sleep -Seconds 5 }
+}
+if (-not $catalogGone) { throw "Pod do catalog-api não terminou em 60s depois de escalar a 0 (teardown)" }
+
+kubectl scale deployment/catalog-api -n norn-shop --replicas=1 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "kubectl scale catalog-api --replicas=1 falhou (teardown)" }
+# 120s: mesmo timeout já usado pro rollout status do reset, no início do script.
+kubectl rollout status deployment/catalog-api -n norn-shop --timeout=120s | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "catalog-api não voltou a Ready em 120s depois do ciclo de limpeza (teardown)" }
 
 Step "Execução $runId concluída ($Scenario/$Arm, repetição $Repetition)"
 
