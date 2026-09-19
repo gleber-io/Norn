@@ -74,11 +74,11 @@ docker exec norn-redis redis-cli GET norn:platform:config:mode              # Ob
 docker exec norn-redis redis-cli HGETALL norn:chaos:active                  # vazio
 docker exec norn-redis redis-cli GET shop:flags:payment.gateway.bypass      # False
 
-# 6. Retenção do Prometheus com folga (limite: 3GB OU 15d, o que vier primeiro)
+# 6. Retenção do Prometheus com folga (limite: 15GB OU 15d, o que vier primeiro — subido de 3GB
+#    pra 15GB numa sessão de acompanhamento, já refletido em compose.otel.yaml; recriar o
+#    container manualmente só é necessário se este valor mudar nesta máquina de novo)
 docker exec norn-prometheus sh -c "du -sh /prometheus"
-#    < 1GB: seguro. Entre 1GB e 2GB: seguir, checar de novo no meio (§6).
-#    > 2GB: NÃO disparar — subir --storage.tsdb.retention.size em deploy/compose/compose.otel.yaml
-#    antes, senão a janela das primeiras execuções é descartada antes da análise.
+#    < 10GB: seguro pras 25h. > 10GB: checar de novo no meio (§6) — a folga é grande, mas não infinita.
 
 # 7. Ferramental de captura instalado (uma vez só)
 ls tools/PanelCapture/node_modules > /dev/null && echo "PanelCapture OK"
@@ -92,8 +92,9 @@ tools/analysis/.venv/Scripts/python.exe --version
 # 9. Dashboard buildado (senão os screenshots do dashboard saem sem conteúdo)
 ls src/Platform/Norn.API/wwwroot/index.html
 
-# 10. Nenhum Worker órfão rodando (o run-campaign.ps1 recusa iniciar se houver)
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='dotnet.exe'\" | Where-Object { \$_.CommandLine -like '*Norn.Worker*' } | Select-Object ProcessId"
+# 10. Nenhum Worker órfão rodando (o run-campaign.ps1 recusa iniciar se houver; uma Norn.API
+#     órfã não é recusada, só reaproveitada — não custa conferir)
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='dotnet.exe'\" | Where-Object { \$_.CommandLine -like '*Norn.Worker*' -or \$_.CommandLine -like '*Norn.API*' } | Select-Object ProcessId, CommandLine"
 #    esperado: vazio
 
 # 11. Árvore de trabalho limpa (o git_commit_sha vai pra experiment_runs — precisa ser honesto)
@@ -117,33 +118,18 @@ ls docs/experiments/campaign-manifest.csv 2>/dev/null
 
 ---
 
-## 4. Preparação — subir o que a campanha precisa e o script não sobe
+## 4. Preparação — o que ainda fica por conta de quem opera
 
-O `run-campaign.ps1` sobe **só o `Norn.Worker`**. Duas coisas ficam por conta de quem opera:
+O `run-campaign.ps1` sobe **`Norn.Worker` e `Norn.API`** sozinho (a API na porta 5080 — a 5000
+default costuma estar ocupada pelo `wslrelay.exe` do WSL2), com o mesmo ciclo de vida do Worker:
+sobe uma vez para o lote inteiro, aguarda `/health/ready` antes de prosseguir, encerra no fim
+(`-SkipApiManagement` pula isso, para quando já houver uma rodando por fora). Sem a API, os
+screenshots do dashboard falhariam em silêncio (best-effort por design em `capture.js`) — por
+isso deixou de ser passo manual.
 
-### 4.1 Norn.API (necessária para os screenshots do dashboard)
+Resta só:
 
-Sem ela, toda captura do dashboard falha — de forma **não bloqueante e silenciosa** (o log mostra
-`FALHOU norn-dashboard`, a campanha segue). As figuras do dashboard simplesmente não existiriam.
-
-```bash
-mkdir -p /c/git/norn-results/logs
-cd /c/git/norn && nohup dotnet run --project src/Platform/Norn.API --urls http://localhost:5080 \
-  > /c/git/norn-results/logs/api-campaign.log 2>&1 &
-disown
-```
-
-> **Porta 5080, não 5000:** a 5000 está ocupada pelo `wslrelay.exe` (rede do WSL2). O
-> `capture.js` já usa 5080 como default.
-
-Confirmar antes de seguir:
-
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5080/          # 200
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5080/health/ready  # 200
-```
-
-### 4.2 Aquecer o Ollama (se `ollama ps` não mostrou o modelo carregado)
+### 4.1 Aquecer o Ollama (se `ollama ps` não mostrou o modelo carregado)
 
 ```bash
 ollama run norn-qwen "Responda apenas com a palavra ok."
@@ -174,12 +160,13 @@ O manifesto é gerado em `docs/experiments/campaign-manifest.csv` na primeira ex
 ### Confirmar que realmente começou (2 min depois)
 
 ```bash
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe' or Name='dotnet.exe'\" | Where-Object { \$_.CommandLine -like '*run-campaign*' -or \$_.CommandLine -like '*Norn.Worker*' } | Select-Object ProcessId, Name"
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe' or Name='dotnet.exe'\" | Where-Object { \$_.CommandLine -like '*run-campaign*' -or \$_.CommandLine -like '*Norn.Worker*' -or \$_.CommandLine -like '*Norn.API*' } | Select-Object ProcessId, Name"
 tail -n 20 /c/git/norn-results/logs/campaign-console.log
+curl -s -o /dev/null -w "Norn.API /health/ready -> %{http_code}\n" http://localhost:5080/health/ready
 ```
 
-Esperado: um `powershell.exe` (run-campaign) e um `dotnet.exe` (Norn.Worker), e o log na fase de
-warmup de 150s.
+Esperado: um `powershell.exe` (run-campaign) e dois `dotnet.exe` (Norn.Worker e Norn.API), o log na
+fase de warmup de 150s, e `200` no `/health/ready` (a API fica pronta bem antes do Worker, ~10-15s).
 
 ### O que NÃO fazer durante as 26h
 
@@ -297,7 +284,7 @@ interrupção operacional (é honestidade metodológica, não demérito).
 | Detecção para de disparar após muitas horas | Habituação de severidade (ADR-14) — a baseline adaptativa acompanha o valor alto | Esperado e **não é motivo de parada**: a aleatorização de blocos existe justamente para isso não virar confundidor. Registrar no TCC como fonte de variância |
 | Séries do serviço somem do Prometheus | `OutOfMemoryException` interna quebra a exportação OTel do processo | Reiniciar o pod afetado (`scale 0→1`); se recorrente em blocos seguidos, parar a campanha |
 | `DecidedBy: Fallback` em todo o braço B | Ollama frio ou descarregado | `ollama ps`; aquecer. Se recorrente, checar `OLLAMA_KEEP_ALIVE=-1` |
-| `FALHOU norn-dashboard` em todo screenshot | Norn.API não está rodando na 5080 | Subir conforme §4.1 — as execuções em si não são afetadas |
+| `FALHOU norn-dashboard` em todo screenshot | `run-campaign.ps1` sobe a API sozinho, mas se `-SkipApiManagement` foi usado ou ela caiu, a captura falha em silêncio | Conferir `Get-CimInstance ... Norn.API`; subir manualmente se preciso — as execuções em si não são afetadas |
 | `kubectl` com timeout depois de reboot | `host.docker.internal` aponta pro IP antigo | Trocar por `127.0.0.1:<porta>` em `~/.kube/config` |
 | Pods do Shop em `CrashLoopBackOff` depois de reboot | CoreDNS perdeu `host.k3d.internal` | `k3d cluster stop norn && k3d cluster start norn` |
 | Docker Desktop não subiu após reboot | Conhecido nesta máquina | `Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"` |
@@ -309,8 +296,9 @@ interrupção operacional (é honestidade metodológica, não demérito).
 Só depois da última execução (`Lote concluido: 60 execucoes.` no console).
 
 ```bash
-# 1. Derrubar Worker e Norn.API
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='dotnet.exe'\" | Where-Object { \$_.CommandLine -like '*Norn.Worker*' -or \$_.CommandLine -like '*Norn.API*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }"
+# 1. Conferir que Worker e API já encerraram sozinhos (o run-campaign.ps1 derruba os dois no
+#    próprio finally, ao concluir o lote) -- só derrubar manualmente se algum sobrou
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='dotnet.exe'\" | Where-Object { \$_.CommandLine -like '*Norn.Worker*' -or \$_.CommandLine -like '*Norn.API*' } | ForEach-Object { Write-Host \"Ainda vivo, encerrando: PID \$(\$_.ProcessId)\"; Stop-Process -Id \$_.ProcessId -Force }"
 
 # 2. Estado seguro do ambiente
 cd /c/git/norn && dotnet run --project tools/Norn.Labeler -- reset --arm A
@@ -397,8 +385,8 @@ Aprendizados do harness, colhidos nas sessões de piloto. Seguir evita retrabalh
 
 ## 12. Resumo executável (a ordem, sem as explicações)
 
-1. Conferir os 11 pré-requisitos (§3) + checklist de higiene
-2. Subir Norn.API na 5080 (§4.1) e aquecer o Ollama (§4.2)
+1. Conferir os 12 pré-requisitos (§3) + checklist de higiene
+2. Aquecer o Ollama se preciso (§4.1) — Worker e API sobem sozinhos com o `run-campaign.ps1`
 3. Disparar com `-MasterSeed` anotado (§5); confirmar que começou
 4. Monitorar a cada 30-60 min (§6); aplicar os critérios de parada mecanicamente
 5. Ao fim: derrubar processos, reset seguro, dump final, `PairedAnalysis`, `analyze.py` (§9)

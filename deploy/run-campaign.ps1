@@ -29,6 +29,14 @@
     depuracao). Sem isso, o campaign sobe um Worker proprio, unico para o lote inteiro inteiro (Fase
     12, achado ao vivo: reiniciar o Worker a cada execucao perderia o warmup do detector, ~150s de
     historico -- o Worker precisa sobreviver as 60 execucoes, so o estado no Redis muda por execucao).
+
+.PARAMETER SkipApiManagement
+    Nao sobe nem derruba a Norn.API -- use quando ja houver uma rodando por fora. Sem isso, o
+    campaign sobe a API sozinha, na porta 5080 (a 5000 default costuma estar ocupada pelo
+    wslrelay.exe do WSL2). Achado ao escrever o runbook da campanha (docs/experiments/plano-campanha.md):
+    sem a API no ar, todo screenshot do dashboard em tools/PanelCapture/capture.js falha em
+    silencio (best-effort por design) -- as 60 execucoes rodariam sem nenhuma figura do dashboard
+    pro TCC, e ninguem perceberia ate revisar os resultados depois de ~25h.
 #>
 param(
     [int]$Repetitions = 5,
@@ -37,7 +45,8 @@ param(
     [bool]$BackupAfterEachBlock = $true,
     [int]$DurationMinutes = 25,
     [int]$InjectionPhaseSeconds = 300,
-    [switch]$SkipWorkerManagement
+    [switch]$SkipWorkerManagement,
+    [switch]$SkipApiManagement
 )
 
 $ErrorActionPreference = "Stop"
@@ -127,6 +136,43 @@ if (-not $SkipWorkerManagement) {
     }
 }
 
+# --- Norn.API: um so processo para o lote inteiro, so pros screenshots do dashboard ---------
+# Diferente do Worker, nao decide nada (ADR-04 nao se aplica) -- uma instancia ja rodando por
+# fora nao e um risco de correcao, so reaproveitada em vez de recusada.
+$apiProcess = $null
+if (-not $SkipApiManagement) {
+    $existingApi = Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" |
+        Where-Object { $_.CommandLine -like "*Norn.API*" }
+    if ($existingApi) {
+        Write-Host "Norn.API ja rodando (PID $($existingApi.ProcessId)) -- reaproveitando, nao subindo outra."
+    } else {
+        Step "Subindo Norn.API (unica para o lote inteiro, so pros screenshots do dashboard)"
+        $apiLogPath = "C:\git\norn-results\logs\api-campaign.log"
+        New-Item -ItemType Directory -Force -Path (Split-Path $apiLogPath) | Out-Null
+        $apiProcess = Start-Process -FilePath "dotnet" -ArgumentList "run", "--project", "src/Platform/Norn.API", "--urls", "http://localhost:5080" `
+            -WorkingDirectory $repoRoot -RedirectStandardOutput $apiLogPath -RedirectStandardError "$apiLogPath.err" `
+            -WindowStyle Hidden -PassThru
+
+        $apiReady = $false
+        for ($attempt = 1; $attempt -le 30 -and -not $apiReady; $attempt++) {
+            if ($apiProcess.HasExited) {
+                throw "Norn.API encerrou sozinha ao subir -- veja $apiLogPath antes de tentar de novo."
+            }
+            try {
+                Invoke-RestMethod -Method Get -Uri "http://localhost:5080/health/ready" -TimeoutSec 2 -ErrorAction Stop | Out-Null
+                $apiReady = $true
+            } catch {
+                Start-Sleep -Seconds 2
+            }
+        }
+        if (-not $apiReady) {
+            # Nao bloqueia o lote -- so os screenshots do dashboard ficam sem efeito (best-effort
+            # por design em capture.js). Perder a API nao pode custar as 60 execucoes de dado real.
+            Write-Warning "Norn.API nao respondeu /health/ready em 60s -- screenshots do dashboard vao falhar (nao bloqueante). Veja $apiLogPath."
+        }
+    }
+}
+
 try {
     # --- Execucao sequencial do lote --------------------------------------------------------
     $blockCounter = 0
@@ -202,5 +248,9 @@ finally {
     if ($workerProcess -and -not $workerProcess.HasExited) {
         Step "Encerrando Norn.Worker do lote"
         Stop-Process -Id $workerProcess.Id -Force
+    }
+    if ($apiProcess -and -not $apiProcess.HasExited) {
+        Step "Encerrando Norn.API do lote"
+        Stop-Process -Id $apiProcess.Id -Force
     }
 }

@@ -29,10 +29,16 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--enable-feature=exemplar-storage"
       # Tarefa 8 da Fase 4: retenção cobre semanas de desenvolvimento até a campanha (Fase 12);
-      # o teto de tamanho é o que protege o disco quando o tempo não basta como limite —
-      # orçamento de 3-6 GB para Prometheus + Tempo juntos (Fase 00, ADR-09).
+      # o teto de tamanho é o que protege o disco quando o tempo não basta como limite.
+      # 3GB (valor original) nunca foi validado contra o padrão real de série da campanha —
+      # achado ao planejar a campanha de 25h: cada RestartPod cria uma série nova no Prometheus
+      # (exported_instance muda a cada pod, nunca reaproveitado), e 60 execuções com múltiplos
+      # restarts cada podem gerar bem mais churn que os ~384MB de uso hoje. Subido pra 15GB —
+      # a máquina tem 122GB livres (checado ao vivo), então a folga é praticamente de graça, e
+      # elimina o risco de evictar a janela das primeiras execuções antes da análise (ADR-09 é
+      # sobre RAM/GPU, não disco — a citação anterior aqui estava errada).
       - "--storage.tsdb.retention.time=15d"
-      - "--storage.tsdb.retention.size=3GB"
+      - "--storage.tsdb.retention.size=15GB"
     ports:
       - "9090:9090"
     healthcheck:
