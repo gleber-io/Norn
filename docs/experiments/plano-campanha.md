@@ -288,6 +288,8 @@ interrupção operacional (é honestidade metodológica, não demérito).
 | `kubectl` com timeout depois de reboot | `host.docker.internal` aponta pro IP antigo | Trocar por `127.0.0.1:<porta>` em `~/.kube/config` |
 | Pods do Shop em `CrashLoopBackOff` depois de reboot | CoreDNS perdeu `host.k3d.internal` | `k3d cluster stop norn && k3d cluster start norn` |
 | Docker Desktop não subiu após reboot | Conhecido nesta máquina | `Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"` |
+| F2 sai `InvalidNoOnset` mais de uma vez em 5 repetições | Esgotamento de pool depende de concorrência sustentada — pode ser timing, não bug (achado do smoke test: 2 de 3 execuções de F2 num teste de 1 repetição cada) | Não é motivo de parada por si só, mas **é** o gatilho do DoD do Master Plan: "se um cenário produz onset de forma intermitente, ele está mal calibrado e volta para a Fase 5". Registrar a taxa real de `InvalidNoOnset` de F2 nas 5 repetições antes de aceitar o resultado |
+| Réplica de algum serviço fora do baseline logo após o fim do lote | `Stop-Process -Force` do Worker não drena ações de cura em voo — um `ScaleUp` decidido perto do fim da última execução pode aplicar depois do teardown já ter restaurado as réplicas | `kubectl get deployments -n norn-shop` no encerramento (§9.2a); `kubectl scale ... --replicas=1` manualmente se preciso |
 
 ---
 
@@ -303,6 +305,13 @@ powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='do
 # 2. Estado seguro do ambiente
 cd /c/git/norn && dotnet run --project tools/Norn.Labeler -- reset --arm A
 kubectl get pods -n norn-shop
+
+# 2a. Conferir réplicas de volta ao baseline (1 em cada) — achado real do smoke test: o
+#     Stop-Process -Force do Worker (passo 1) não drena ações de cura em voo (diferente de um
+#     StopAsync gracioso), então um ScaleUp decidido perto do fim da última execução pode aplicar
+#     DEPOIS do teardown já ter restaurado as réplicas, deixando o Deployment fora do baseline.
+kubectl get deployments -n norn-shop
+#    algum diferente de 1/1? kubectl scale deployment/<nome> -n norn-shop --replicas=1
 
 # 3. Dump final do Postgres
 powershell -NoProfile -File deploy/dump-knowledge.ps1

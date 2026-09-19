@@ -1388,6 +1388,89 @@ execuções de F1 anteriores) e o `dump-knowledge.ps1` com o destino novo (dump 
 `C:\git\norn-results\postgres-backups\`). Artefatos de teste removidos depois — a pasta nasce vazia
 de novo na próxima execução real (`New-Item -Force` em todo os três scripts).
 
+**Runbook da campanha (`docs/experiments/plano-campanha.md`) escrito e dois problemas reais do
+plano resolvidos em código, sessão de acompanhamento seguinte.** O runbook cobre pré-requisitos
+verificáveis, disparo, monitoramento com critérios de parada mecânicos, retomada e coleta final —
+ver o arquivo. Dois achados ao revisá-lo, ambos corrigidos: (1) `run-campaign.ps1` não subia a
+Norn.API — sem ela, todo screenshot do dashboard falharia em silêncio nas 60 execuções; agora sobe
+sozinha (porta 5080, mesmo ciclo de vida do Worker: `/health/ready` antes de prosseguir, encerra no
+`finally`, `-SkipApiManagement` pula isso). (2) retenção do Prometheus por tamanho estava em 3GB
+(`compose.otel.yaml`) sem nunca ter sido validada contra o padrão real de série de uma campanha —
+cada `RestartPod` cria uma série nova (`exported_instance` muda a cada pod), então 60 execuções com
+múltiplos restarts cada arriscavam evictar a janela das primeiras execuções antes da análise.
+Subido pra 15GB (122GB livres em disco, checado ao vivo) — container recriado, dado histórico
+preservado. Também corrigida a estimativa de "~20h" pra "~25h" (60 × 25min).
+
+**Smoke test do `run-campaign.ps1` de ponta a ponta — sessão de acompanhamento seguinte,
+DECISÃO DELIBERADA antes de comprometer as ~26h da campanha completa.** Mas os pilotos
+anteriores tinham rodado só `run-experiment.ps1` isolado; a camada de orquestração (bloco de 3
+disparando backup+captura, os dois processos subindo/descendo juntos, cópia final dos CSVs) nunca
+tinha sido exercitada de verdade. Rodado `-Repetitions 1` (12 execuções, seed de teste `999`,
+~6h de máquina) com o ambiente já de pé (containers reiniciados havia ~20 min por conta própria —
+node com `<invalid>` de idade e `metrics-server` preso em 401 logo depois do boot, os dois **falsos
+alarmes**: cosmético do próprio `kubectl` e RBAC real intacto, confirmado com `--subresource=scale`
+em vez da forma combinada `deployments/scale` que o `kubectl auth can-i` resolve ambíguo contra o
+grupo errado — acabou sendo o motivo real por trás do próprio invariante do CLAUDE.md sobre
+`SelfSubjectAccessReview` nunca usar `Resource = "deployments/scale"`).
+
+**Resultado do smoke test: sucesso — as 12 execuções fecharam, os 4 blocos dispararam backup +
+captura de painéis corretamente, e o lote encerrou sozinho (Worker e API derrubados no próprio
+`finally`), a primeira vez que esse caminho inteiro rodou de verdade.** 9 de 12 execuções com dado
+válido (`Recovered`/`CensoredAtWindowEnd`), 3 `InvalidNoOnset` (2 em F2, 1 em F3 — ver achado
+abaixo). Screenshots reais gerados em todos os pontos esperados (`executions/` por execução,
+`blocks/` a cada 3), backup do Postgres a cada bloco (4 dumps reais).
+
+**Achado sério, encontrado no meio do smoke test — `anomaly_contexts.experiment_run_id` sempre
+`NULL` em produção, corrigido ao vivo, sem parar o teste em andamento.** `AnomalyPipelineBackgroundService.cs`
+chamava `ContextCorrelator.BuildContext(..., experimentRunId: null, ...)` com o valor **hardcoded**
+desde que o parâmetro existe — `Norn.PairedAnalysis` (H2, McNemar pareado) faz inner join em cima
+dessa coluna contra `experiment_runs`, então o join nunca bateria com nada e H2 sairia vazio,
+silenciosamente, só descoberto ao rodar a análise no fim de uma campanha de ~25h. **Exatamente o
+tipo de bug que motivou fazer o smoke test em primeiro lugar.** Corrigido com o mesmo padrão de
+`Mode`/`PlannerBackend`: `IPlatformConfig` ganhou `GetCurrentExperimentRunIdAsync`/
+`SetCurrentExperimentRunIdAsync` (Redis, `KeyDeleteAsync` no caso `null` — "fora de campanha" é
+ausência de chave, não um valor sentinela); `Norn.Labeler init-run` grava, `label` limpa ao final;
+`Norn.Worker` lê uma vez por ciclo e carimba em todo `AnomalySignal`. Decisão de não reiniciar o
+Worker do smoke test em andamento (perderia o warmup) — validado à parte, ao vivo, contra o Redis
+real via `init-run`/`label` manuais com um run-id descartável, confirmando o ciclo grava/limpa
+funcionando fora do processo em teste. Achado do `code-reviewer` na correção: o valor não devia ser
+relido fresco no instante em que a janela de correlação (~60s) fecha (podia divergir do
+`ExperimentRunId` já gravado nos próprios sinais que compõem o contexto, se a campanha trocasse de
+execução no meio da janela) — corrigido pra derivar de `signals[0].ExperimentRunId`, a mesma fonte
+que `primaryTarget` já usava. `RedisPlatformConfigTests.cs` novo (Testcontainers.Redis, 4 testes) —
+a classe nunca tinha teste nenhum antes, exceção aberta ao padrão dado o custo assimétrico de uma
+regressão aqui (H2 vazio no fim de 25h, não uma falha visível no próximo ciclo).
+
+**Achado de calibração, não corrigido nesta sessão — F2 saiu `InvalidNoOnset` em 2 das 3 execuções
+do smoke test (braços B e A; só C recuperou).** Carga entregue estava ótima nas duas
+(~10,9-11,0 contra alvo 11 — não é problema de instrumentação), o onset genuinamente não cruzou o
+limiar dentro da janela. Com `-Repetitions 1` não dá pra distinguir azar de má calibração — mas o
+próprio DoD do Master Plan é explícito: *"se um cenário produz onset de forma intermitente, ele
+está mal calibrado e volta para a Fase 5"*. Registrado no runbook (§8) como item a observar nas 5
+repetições reais da campanha — se a taxa de `InvalidNoOnset` de F2 persistir alta, é sinal de
+recalibrar o cenário antes de aceitar o dado, não só refazer as execuções perdidas.
+
+**Achado operacional, não é bug — `Stop-Process -Force` do Worker não drena ações de cura em
+voo.** Ao fim do smoke test, `order-api` ficou em 2 réplicas mesmo depois do teardown da última
+execução já ter restaurado o baseline — uma decisão real de `ScaleUp` (mode `Active`, braço B,
+reagindo a degradação real de latência sob a carga sustentada de ~6h) aplicou depois do teardown,
+no intervalo entre o script terminar e o `Stop-Process -Force` matar o Worker (que não passa pelo
+dreno gracioso de `targetsInFlight` que um `StopAsync` normal faria). Corrigido apenas
+operacionalmente (réplica restaurada manualmente); registrado no runbook (§9.2a, novo passo de
+conferência) como parte do checklist de encerramento da campanha real.
+
+**Ambiente ao fim desta sessão:** todo artefato do smoke test removido (`C:\git\norn-results`
+inteiro, `docs/experiments/campaign-manifest.csv`, as 12 linhas de `experiment_runs` com
+`randomization_seed=999`, os CSV consolidados revertidos ao estado commitado) — a próxima campanha
+começa de um estado limpo, sem dado de teste misturado. Mode `Observe`, `shop:flags:` zeradas,
+réplicas de todos os serviços do Shop de volta a 1, Worker/API/LoadGenerator locais encerrados.
+Docker Desktop/infra/cluster deixados de pé (reaproveitados, não provisionados nesta sessão).
+
+**Com o smoke test validando a orquestração inteira e o bug real do H2 corrigido, o ferramental da
+Fase 12 está pronto para a campanha completa de 60 execuções** — falta só decidir quando rodá-la, e
+observar a taxa de `InvalidNoOnset` de F2 nas primeiras repetições reais antes de assumir que o
+cenário está bem calibrado.
+
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
 ADRs → docs/adr/
