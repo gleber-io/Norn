@@ -113,6 +113,27 @@ if (-not $SkipPreflightConfirmation) {
     if ($confirmation -ne "s") { throw "Execução cancelada — checklist da tarefa 3a não confirmado." }
 }
 
+# Achado ao vivo (piloto F3/B): a primeira chamada real ao Ollama depois de um restart da máquina
+# carrega o modelo na GPU (~15s) antes de sequer começar a avaliar o prompt — mais que o
+# OllamaTimeout de 10s (Norn.Worker/appsettings.json) configurado na chamada real. Sem aquecer
+# antes, a primeira (e só a primeira) decisão do braço B sempre cai no timeout e cai para o
+# RuleEngine via fallback — não é falha de lógica, é a janela fria nunca terminando dentro do
+# timeout. Só vale para o braço B (RuleEngine, braço C, nunca chama o Ollama) e é best-effort —
+# se falhar, o próprio fallback do §5.5 já cobre o caso, então não bloqueia a execução.
+if ($Arm -eq "B") {
+    Step "Aquecendo o Ollama (braço B) — carrega norn-qwen na GPU antes do laço real"
+    try {
+        $warmupOutput = ollama run norn-qwen "Responda apenas com a palavra ok." 2>&1
+        # $ErrorActionPreference = "Stop" não converte código de saída de processo nativo em
+        # exceção — sem checar $LASTEXITCODE, uma falha interna do `ollama run` (não "comando não
+        # encontrado") passaria batido como "Ollama aquecido." (achado da revisão de código).
+        if ($LASTEXITCODE -ne 0) { throw "ollama run saiu com código $LASTEXITCODE`: $warmupOutput" }
+        Write-Host "Ollama aquecido."
+    } catch {
+        Write-Warning "Aquecimento do Ollama falhou (não bloqueante) — a primeira decisão real do braço B pode cair no fallback por timeout: $_"
+    }
+}
+
 # --- Reset de estado (tarefa 2a) ---------------------------------------------------------
 Step "Reset: flags em false, modo/plannerBackend conforme o braço $Arm"
 $resetOutput = dotnet run --project tools/Norn.Labeler -- reset --arm $Arm 2>&1
@@ -186,13 +207,6 @@ $loadGenJob = Start-Job -ScriptBlock {
 } -ArgumentList $repoRoot, $LoadSeed, $DurationMinutes, $TargetBaseRps, $TargetPeakRps, $loadReportPath
 
 $portForwardJob = $null
-if ($Scenario -eq "F3") {
-    Step "Abrindo port-forward para Payment.API (sem NodePort, D9)"
-    $portForwardJob = Start-Job -ScriptBlock {
-        kubectl port-forward svc/payment-api 8082:8080 -n norn-shop
-    }
-    Start-Sleep -Seconds 3
-}
 
 # Achado ao vivo (piloto F1/C, 18/09/2026): sem este try/finally, qualquer falha entre ativar o
 # caos e desativá-lo (inclusive um bug de sintaxe do PowerShell ao chamar kubectl) derrubava o
@@ -205,6 +219,33 @@ $cpuClockAvgMhz = $null
 $observationEndUtc = $null
 $injectionAtUtc = $null
 try {
+    if ($Scenario -eq "F3") {
+        Step "Abrindo port-forward para Payment.API (sem NodePort, D9)"
+        # Achado ao vivo (piloto F3/B): a causa real da primeira falha aqui não foi timing — foi a
+        # porta errada. O Service `payment-api` expõe a porta 80 (`targetPort: 8080` é só o
+        # container); `kubectl port-forward svc/payment-api <local>:8080` falha na hora com "Service
+        # payment-api does not have a service port 8080" (confirmado ao vivo), nunca chegando a
+        # abrir o túnel — daí "Impossível conectar-se ao servidor remoto" na ativação do caos, em
+        # qualquer tempo de espera. Porta corrigida para 80 (a do Service, não a do container). Bloco
+        # movido para dentro do try/finally que já existe (antes vivia fora dele).
+        $portForwardJob = Start-Job -ScriptBlock {
+            kubectl port-forward svc/payment-api 8082:80 -n norn-shop
+        }
+
+        $portForwardReady = $false
+        for ($attempt = 1; $attempt -le 15 -and -not $portForwardReady; $attempt++) {
+            try {
+                Invoke-RestMethod -Method Get -Uri "$($target.AdminBaseUrl)/health/live" -TimeoutSec 2 -ErrorAction Stop | Out-Null
+                $portForwardReady = $true
+            } catch {
+                Start-Sleep -Seconds 2
+            }
+        }
+        if (-not $portForwardReady) {
+            throw "Port-forward para Payment.API não respondeu em $(($attempt - 1) * 2)s — abortando antes de tentar ativar o caos (tarefa 3, F3)."
+        }
+    }
+
     Step "Aguardando o instante de injeção (fase $InjectionPhaseSeconds s do ciclo)"
     Start-Sleep -Seconds $InjectionPhaseSeconds
 
@@ -215,8 +256,22 @@ try {
 
     Step "Ativando caos: $Scenario (seed=$ChaosSeed) em $($target.Deployment)"
     $activateBody = @{ scenarioId = $Scenario; seed = $ChaosSeed } | ConvertTo-Json
-    Invoke-RestMethod -Method Post -Uri "$($target.AdminBaseUrl)/admin/chaos/activate" -Body $activateBody -ContentType "application/json" | Out-Null
-    $chaosActivated = $true
+
+    # Mesma robustez já aplicada à desativação (achado ao vivo, piloto F1/C) — 3 tentativas antes
+    # de desistir, para qualquer falha transitória de rede/pod não abortar o script inteiro fora
+    # do try/finally que protege a desativação.
+    for ($attempt = 1; $attempt -le 3 -and -not $chaosActivated; $attempt++) {
+        try {
+            Invoke-RestMethod -Method Post -Uri "$($target.AdminBaseUrl)/admin/chaos/activate" -Body $activateBody -ContentType "application/json" -ErrorAction Stop | Out-Null
+            $chaosActivated = $true
+        } catch {
+            Write-Warning "Tentativa $attempt de ativar o caos falhou: $_"
+            if ($attempt -lt 3) { Start-Sleep -Seconds 5 }
+        }
+    }
+    if (-not $chaosActivated) {
+        throw "Ativação do caos ($Scenario) falhou 3x — abortando execução."
+    }
 
     if ($Scenario -eq "F5") {
         # O F5 é kill abrupto e (quase) instantâneo — o próprio injetor grava o instante em Redis.
