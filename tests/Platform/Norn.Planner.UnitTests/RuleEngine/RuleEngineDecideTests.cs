@@ -49,6 +49,39 @@ public sealed class RuleEngineDecideTests
     }
 
     [Fact]
+    public void Decide_F3SignatureFromPaymentService_ProducesToggleFeatureFlagDecidedByRuleEngine()
+    {
+        var context = AnomalyContextBuilder.Build(
+            primaryMetricName: "norn_shop_payments_gateway_latency_ms",
+            severity: Severity.High,
+            service: "Norn.Shop.Payment.API");
+
+        var plan = CreateEngine().Decide(context);
+
+        plan.DecidedBy.ShouldBe(DecidedBy.RuleEngine);
+        plan.Actions.ShouldHaveSingleItem();
+        plan.Actions[0].Type.ShouldBe(HealingActionType.ToggleFeatureFlag);
+    }
+
+    [Fact]
+    public void Decide_F3SignatureFromServiceThatDoesNotOwnTheFlag_DegradesToNoOpWithFallback()
+    {
+        // Achado ao vivo, Fase 12 (piloto F5): um sinal de 5xx do Catalog não deve ligar a flag do
+        // Payment — a pré-condição de escopo rejeita, e o plano cai para NoOp/Fallback, não para
+        // ToggleFeatureFlag aceito.
+        var context = AnomalyContextBuilder.Build(
+            primaryMetricName: "norn_shop_payments_gateway_latency_ms",
+            severity: Severity.High,
+            service: "Norn.Shop.Catalog.API");
+
+        var plan = CreateEngine().Decide(context);
+
+        plan.DecidedBy.ShouldBe(DecidedBy.Fallback);
+        plan.Actions.ShouldHaveSingleItem();
+        plan.Actions[0].Type.ShouldBe(HealingActionType.NoOp);
+    }
+
+    [Fact]
     public void Decide_TargetInCooldown_DegradesToNoOpWithFallback()
     {
         var context = AnomalyContextBuilder.Build(

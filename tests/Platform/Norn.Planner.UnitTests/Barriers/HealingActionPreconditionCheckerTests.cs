@@ -109,12 +109,23 @@ public sealed class HealingActionPreconditionCheckerTests
     }
 
     [Fact]
-    public void Check_ToggleFeatureFlag_FlagInShopCatalog_Accepted()
+    public void Check_ToggleFeatureFlag_FlagInShopCatalogAndServiceMatchesOwner_Accepted()
     {
-        var context = AnomalyContextBuilder.Build();
+        var context = AnomalyContextBuilder.Build(service: "Norn.Shop.Payment.API");
         var action = ToggleFlagAction(ShopFlagCatalog.PaymentGatewayBypass, context);
 
         CreateChecker().Check(context, action).Accepted.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Check_ToggleFeatureFlag_SignalFromServiceThatDoesNotOwnTheFlag_Rejected()
+    {
+        // Achado ao vivo, Fase 12 (piloto F5): um sinal de 5xx do Catalog não pode ligar a flag do
+        // Payment — a flag existe no catálogo, mas pertence a outro serviço.
+        var context = AnomalyContextBuilder.Build(service: "Norn.Shop.Catalog.API");
+        var action = ToggleFlagAction(ShopFlagCatalog.PaymentGatewayBypass, context);
+
+        CreateChecker().Check(context, action).Accepted.ShouldBeFalse();
     }
 
     [Fact]

@@ -12,4 +12,14 @@ public static class ShopFlagCatalog
     public const string PaymentGatewayBypass = "payment.gateway.bypass";
 
     public static readonly IReadOnlyList<string> All = [PaymentGatewayBypass];
+
+    /// <summary>
+    /// Serviço dono de cada flag — fonte única para a pré-condição de escopo do <c>ToggleFeatureFlag</c>
+    /// (achado ao vivo da Fase 12, piloto F5: um sinal de 5xx do Catalog chegou a ligar esta flag,
+    /// que só tem efeito no Payment). Sem este mapa, <see cref="Norn.Contracts.HealingAction.Target"/>
+    /// (o serviço do sinal que originou a decisão) e a flag de fato escrita podem divergir em
+    /// silêncio.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string> OwnerServiceByFlag =
+        new Dictionary<string, string> { [PaymentGatewayBypass] = "Norn.Shop.Payment.API" };
 }

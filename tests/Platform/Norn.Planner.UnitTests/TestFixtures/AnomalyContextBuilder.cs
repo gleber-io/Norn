@@ -20,12 +20,13 @@ internal static class AnomalyContextBuilder
         string? podUid = "uid-1",
         IReadOnlyList<HealingHistoryEntry>? healingHistory = null,
         bool inCooldown = false,
-        DateTimeOffset? createdAtUtc = null)
+        DateTimeOffset? createdAtUtc = null,
+        string service = "Norn.Shop.Catalog.API")
     {
         var created = createdAtUtc ?? DefaultCreatedAtUtc;
         var target = new ServiceTarget
         {
-            Service = "Norn.Shop.Catalog.API",
+            Service = service,
             Namespace = "norn-shop",
             Pod = pod,
             PodUid = podUid,

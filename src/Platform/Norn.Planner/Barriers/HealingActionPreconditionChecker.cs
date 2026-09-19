@@ -37,7 +37,7 @@ public sealed class HealingActionPreconditionChecker(PlannerOptions options)
         {
             HealingActionType.ScaleUp => CheckScaleUp(context, action),
             HealingActionType.RestartPod => CheckRestartPod(context, action),
-            HealingActionType.ToggleFeatureFlag => CheckToggleFeatureFlag(action),
+            HealingActionType.ToggleFeatureFlag => CheckToggleFeatureFlag(context, action),
             _ => PreconditionResult.Reject($"Tipo de ação fora do catálogo fechado: '{action.Type}'."),
         };
     }
@@ -111,12 +111,30 @@ public sealed class HealingActionPreconditionChecker(PlannerOptions options)
             : PreconditionResult.Ok();
     }
 
-    private static PreconditionResult CheckToggleFeatureFlag(HealingAction action)
+    /// <summary>
+    /// Duas pré-condições: a flag existe no catálogo, e o serviço do sinal que originou a decisão
+    /// é o dono dessa flag (<see cref="ShopFlagCatalog.OwnerServiceByFlag"/>) — achado ao vivo da
+    /// Fase 12 (piloto F5): sem esta segunda checagem, um sinal de 5xx do Catalog liga a flag do
+    /// Payment sem nenhuma relação entre os dois.
+    /// </summary>
+    private static PreconditionResult CheckToggleFeatureFlag(AnomalyContext context, HealingAction action)
     {
         if (!action.Parameters.TryGetValue("flagName", out var flagName) ||
             !ShopFlagCatalog.All.Contains(flagName))
         {
             return PreconditionResult.Reject("flagName fora do catálogo de flags do Shop (§5.7).");
+        }
+
+        if (!ShopFlagCatalog.OwnerServiceByFlag.TryGetValue(flagName, out var ownerService))
+        {
+            return PreconditionResult.Reject($"flagName '{flagName}' sem serviço dono cadastrado em ShopFlagCatalog.OwnerServiceByFlag — catálogo inconsistente.");
+        }
+
+        var signalService = context.PrimarySignal.Target.Service;
+        if (!string.Equals(ownerService, signalService, StringComparison.Ordinal))
+        {
+            return PreconditionResult.Reject(
+                $"flagName '{flagName}' pertence a '{ownerService}', mas o sinal primário é de '{signalService}' — ação fora de escopo.");
         }
 
         return PreconditionResult.Ok();

@@ -33,7 +33,7 @@ public static class HealingActionCatalog
                 HealingActionType.ToggleFeatureFlag,
                 "Ativa ou desativa uma flag do catálogo do Shop.",
                 ["flagName", "value"],
-                $"flagName existe no catálogo de flags do Shop ({string.Join(", ", ShopFlagCatalog.All)})"),
+                $"flagName existe no catálogo de flags do Shop ({string.Join(", ", ShopFlagCatalog.All)}); serviço do sinal primário é o dono da flag"),
             [HealingActionType.NoOp] = new(
                 HealingActionType.NoOp,
                 "Não atua — registra a decisão de não agir.",
