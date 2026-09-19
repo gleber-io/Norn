@@ -1167,12 +1167,35 @@ achado"):** o kill+recriação do pod do Catalog gerou dois falsos positivos rea
    originou, provavelmente em `HealingActionPreconditionChecker` ou na montagem do `HealingAction`
    dentro de `RuleEngine.Decide`, não só em `DecideActionType`).
 
+**Gap do `ToggleFeatureFlag` sem escopo de serviço — corrigido (sessão de acompanhamento).**
+`ShopFlagCatalog` ganhou `OwnerServiceByFlag` (mapa flag → serviço dono; hoje só
+`PaymentGatewayBypass → Norn.Shop.Payment.API`, mas é a mesma "fonte única" que `All` já era
+desde a Fase 8). `HealingActionPreconditionChecker.CheckToggleFeatureFlag` passou a receber o
+`AnomalyContext` (não só a `HealingAction`) e rejeita quando `context.PrimarySignal.Target.Service`
+não é o dono da flag — `TryGetValue` em vez do indexador, para uma flag nova entrando em `All` sem
+entrada correspondente em `OwnerServiceByFlag` virar `PreconditionResult.Reject` (mesma filosofia
+"nunca lança, sempre decide" do resto do checker), não uma `KeyNotFoundException` derrubando o
+Planner. A correção fica só na barreira, não em `RuleEngine.DecideActionType` (função pura,
+continua sem noção de serviço, como o comentário da classe já documentava) — `RuleEngine.Decide`
+e `LlmOutputValidator` (braço B) chamam o mesmo `preconditionChecker.Check`, então os dois braços
+ganharam a correção pelo mesmo commit, sem duplicar a regra. `HealingActionCatalog` (texto que
+alimenta o system prompt do LLM) também atualizado. Achado curioso confirmado ao ler os testes
+antigos: o bug estava literalmente embutido em `Check_ToggleFeatureFlag_FlagInShopCatalog_Accepted`
+— o teste aceitava a flag do Payment com um contexto do Catalog, o mesmo cenário do achado ao vivo
+do piloto F5, sem ninguém notar até agora. Teste corrigido para usar serviço do Payment, mais um
+teste novo de regressão para o mismatch, mais dois testes ponta a ponta de `Decide()` para F3 (não
+existiam antes — só a função pura `DecideActionType` era testada contra a assinatura F3). 187
+testes verdes em `Norn.Planner.UnitTests` (184 + 3 novos), `dotnet format --verify-no-changes`
+limpo, `code-reviewer` sem achados bloqueantes. **Só a correção de código — não validado ao vivo
+contra o cluster ainda** (o achado original só foi confirmado num piloto real; fechar o ciclo
+exigiria repetir o piloto F5 com a correção no ar e confirmar que a flag do Payment não liga mais
+por sinal do Catalog).
+
 **O que ainda fica para fechar os pilotos do DoD da Fase 12:** um terceiro piloto num cenário/braço
 ainda não tentado (F2 ou F3, e o braço B/LLM) para completar a diversidade dos 3 exigidos; decidir
-se e como corrigir o gap do `ToggleFeatureFlag` sem escopo de serviço (achado acima — decisão do
-usuário, não assumida aqui); decidir se o ciclo de `kubectl scale 0→1` do Catalog entre execuções
-vale a pena automatizar dentro do `run-campaign.ps1` (hoje é manual, e a campanha real vai precisar
-disso repetidamente).
+se o ciclo de `kubectl scale 0→1` do Catalog entre execuções vale a pena automatizar dentro do
+`run-campaign.ps1` (hoje é manual, e a campanha real vai precisar disso repetidamente); validar ao
+vivo a correção do `ToggleFeatureFlag` acima (só testada por unitário até aqui).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
