@@ -1251,13 +1251,38 @@ dois tentado aqui.
 Docker Desktop/infra/cluster deixados de pé (reaproveitados de uma sessão anterior, não
 provisionados nesta).
 
+**Critério de onset do Labeler estendido para cobrir latência sem taxa de erro (F3) — corrigido em
+código, sessão de acompanhamento seguinte; ainda não validado ao vivo.** `OnsetRecoveryCalculator`
+ganhou uma segunda via de onset, só para F3: latência sustentada por 30s acima do SLO do gateway
+(500ms — mesmo valor de `SeverityBandOptions.Bands["norn_shop_payments_gateway_latency_ms"]`,
+Norn.Analyzer; duplicado como constante local porque Norn.Labeler não referencia Norn.Analyzer,
+§4, mesmo motivo pelo qual o limiar de 1% de erro já era local). Onset continua sendo o que ocorrer
+primeiro entre as vias disponíveis (erro, latência quando F3, OOM quando F1); a recuperação é
+sempre calculada na mesma série que decidiu o onset — nunca misturando taxa de erro com latência,
+porque grandezas diferentes tornariam `tempo_até_recuperação` incomparável entre execuções e
+contaminariam H1. `LabelCommand` passou a buscar a série de p99 de
+`norn_shop_payments_gateway_latency_ms` no Prometheus só quando `scenario == "F3"` (mesma query que
+`PrometheusQueryCatalog`, Norn.Monitor, duplicada pelo mesmo motivo de sempre — Labeler não
+referencia Monitor).
+
+**Achado do `code-reviewer` antes do commit, corrigido na hora:** num empate exato entre as duas
+vias (plausível de verdade em F3 — um timeout de gateway tende a gerar 5xx e latência alta na mesma
+amostra), o código caía silenciosamente na série de latência para a recuperação, só por efeito
+colateral de como o `EarliestNonNull` já existente resolve empate (devolve o segundo argumento) —
+não por decisão de negócio nenhuma. Corrigido para a taxa de erro vencer qualquer empate (via mais
+testada, closer ao resto do rotulador), com teste de regressão dedicado para o caso de empate exato.
+`F3Scenario`/`F5Scenario` também viraram `internal` em vez de string solta duplicada em
+`LabelCommand`. 21 testes verdes em `Norn.Labeler.UnitTests` (18 + 3 novos), `dotnet format
+--verify-no-changes` limpo. **Só a correção de código — não validado ao vivo ainda**: fechar de
+verdade exigiria repetir o piloto F3/B (ou um F3/C) com a correção no ar e confirmar que uma
+execução real que antes saía `InvalidNoOnset` agora produz `Recovered`/`CensoredAtWindowEnd`.
+
 **O que ainda fica para fechar os pilotos do DoD da Fase 12:** decidir se o ciclo de
 `kubectl scale 0→1` do Catalog entre execuções vale a pena automatizar dentro do
 `run-campaign.ps1` (hoje é manual, e a campanha real vai precisar disso repetidamente); validar ao
-vivo o fix do `ToggleFeatureFlag` (achado acima); decidir se/como estender o critério de onset do
-Labeler para cobrir degradação de latência sem taxa de erro (achado do F3 acima) antes de rodar a
-campanha completa, já que hoje qualquer execução de F3 corre risco real de sair `InvalidNoOnset`
-mesmo com o cenário funcionando como projetado.
+vivo o fix do `ToggleFeatureFlag` (achado acima); validar ao vivo a via de onset por latência do F3
+recém-corrigida (achado acima) — nenhuma das duas correções de escopo/onset foi exercitada contra o
+cluster real ainda.
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
