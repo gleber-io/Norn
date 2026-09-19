@@ -1277,12 +1277,40 @@ testada, closer ao resto do rotulador), com teste de regressão dedicado para o 
 verdade exigiria repetir o piloto F3/B (ou um F3/C) com a correção no ar e confirmar que uma
 execução real que antes saía `InvalidNoOnset` agora produz `Recovered`/`CensoredAtWindowEnd`.
 
+**Piloto ao vivo F3/braço C (sessão de acompanhamento seguinte) — os dois fixes de escopo/onset
+validados contra o cluster real, um único piloto fechando os dois.** Infra já de pé (Docker
+Desktop, k3d, Postgres/Redis/Prometheus, Ollama quente — nenhuma recuperação de ambiente
+necessária desta vez). `Norn.Worker` subido isolado (mesmo padrão de `run-campaign.ps1`: processo
+único, ~150s de warmup antes da carga real), `reset --arm C` confirmou `mode=Active`/
+`plannerBackend=RuleEngine`, `run-experiment.ps1 -Scenario F3 -Arm C` rodado do início ao fim sem
+intervenção manual (25 min, checklist da tarefa 3a confirmado).
+
+- **Fix do `ToggleFeatureFlag` sem escopo de serviço — validado ao vivo.** `RuleEngine` decidiu
+  `ToggleFeatureFlag` para a assinatura de F3 (latência do gateway em `Critical`), com
+  `target.service = Norn.Shop.Payment.API` — o dono real da flag — confirmado direto em
+  `healing_plans`/`healing_outcomes` (Postgres): `status=Succeeded`, `sloRestored=true`,
+  `shop:flags:payment.gateway.bypass` virou `true` de verdade no Redis. Nenhum sinal de outro
+  serviço tentou essa ação durante a execução, então o piloto não repetiu o caso de rejeição
+  cross-service do F5 (esse continua coberto só por teste unitário) — mas confirma ao vivo o
+  caminho principal: a pré-condição aceita corretamente quando o alvo bate com o dono da flag.
+- **Via de onset por latência do F3 — validada ao vivo, com comparação direta antes/depois.** A
+  execução saiu `termination_state=CensoredAtWindowEnd`, `onset_at_utc` real detectado (a taxa de
+  erro do Payment nunca subiu em `anomaly_signals` — só `norn_shop_payments_gateway_latency_ms`
+  chegou a `Critical` — exatamente o caso que motivou o fix), `achieved_rps=10.87` dentro de ±10%
+  do alvo. A linha caiu em `labeled-runs.csv` (dado de campanha válido), não em
+  `discarded-runs.csv` — onde continua registrada, para comparação, a execução histórica
+  `F3/B` que saiu `InvalidNoOnset` antes da correção. Mesma classe de degradação (F3, latência sem
+  taxa de erro), resultado oposto antes/depois do fix.
+
+Ambiente revertido ao final pelos adaptadores reais (`reset --arm A`: `mode=Observe`,
+`plannerBackend=RuleEngine`, flags zeradas), `Norn.Worker` local encerrado, réplicas do Shop de
+volta a 1 em cada serviço (`catalog-api`/`order-api`/`payment-api`), caos F3 desativado sem precisar
+do fallback via Redis (a desativação via HTTP funcionou de primeira desta vez).
+
 **O que ainda fica para fechar os pilotos do DoD da Fase 12:** decidir se o ciclo de
 `kubectl scale 0→1` do Catalog entre execuções vale a pena automatizar dentro do
-`run-campaign.ps1` (hoje é manual, e a campanha real vai precisar disso repetidamente); validar ao
-vivo o fix do `ToggleFeatureFlag` (achado acima); validar ao vivo a via de onset por latência do F3
-recém-corrigida (achado acima) — nenhuma das duas correções de escopo/onset foi exercitada contra o
-cluster real ainda.
+`run-campaign.ps1` (hoje é manual, e a campanha real vai precisar disso repetidamente) — único item
+que resta antes de considerar o ferramental pronto para a campanha completa (60 execuções).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)

@@ -1,3 +1,4 @@
 experiment_run_id,scenario,arm,repetition,run_order,target_rps,achieved_rps,termination_state,onset_at_utc,recovered_at_utc,window_end_at_utc,tempo_ate_recuperacao_segundos,evento_observado
 97949e4c-a455-4603-a1c6-9410a7e7e193,F1,C,1,1,11,11.016522118319685,CensoredAtWindowEnd,09/18/2026 20:22:31 +00:00,,09/18/2026 20:32:31 +00:00,600,0
 c0cbf700-5545-4e74-b61f-08b574203bc0,F5,C,1,2,11,11.01657549578708,Recovered,09/18/2026 21:03:32 +00:00,09/18/2026 21:10:25 +00:00,09/18/2026 21:13:32 +00:00,412.828215,1
+0409fdd6-269d-4ffb-9ad8-559a1ef097de,F3,C,1,1,11,10.87370136292138,CensoredAtWindowEnd,09/19/2026 01:59:24 +00:00,,09/19/2026 02:09:24 +00:00,600,0
