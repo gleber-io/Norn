@@ -1394,3 +1394,4 @@ ADRs → docs/adr/
 Métricas → docs/metrics-matrix.md (nasce na Fase 4)
 Tabela de regras (golden do teste) → docs/rule-table.md (nasce na Fase 8)
 Contrato da Norn.API (rotas, DTOs, enums, eventos do hub) → docs/norn-api-contract.md (nasce na Fase 11)
+Runbook da campanha de 25h (pré-requisitos, disparo, monitoramento, parada, coleta) → docs/experiments/plano-campanha.md
