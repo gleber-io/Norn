@@ -1307,10 +1307,26 @@ Ambiente revertido ao final pelos adaptadores reais (`reset --arm A`: `mode=Obse
 volta a 1 em cada serviço (`catalog-api`/`order-api`/`payment-api`), caos F3 desativado sem precisar
 do fallback via Redis (a desativação via HTTP funcionou de primeira desta vez).
 
-**O que ainda fica para fechar os pilotos do DoD da Fase 12:** decidir se o ciclo de
-`kubectl scale 0→1` do Catalog entre execuções vale a pena automatizar dentro do
-`run-campaign.ps1` (hoje é manual, e a campanha real vai precisar disso repetidamente) — único item
-que resta antes de considerar o ferramental pronto para a campanha completa (60 execuções).
+**Ciclo de escala 0→1 do Catalog automatizado — último item pendente da Fase 12, fechado.**
+Decisão tomada: automatizar dentro do próprio `run-experiment.ps1` (não no `run-campaign.ps1`), no
+teardown, incondicionalmente — assim cobre tanto a campanha completa quanto um piloto isolado, e o
+custo (~10-20s) é desprezível contra os 25 min de uma execução. `catalog-api` saiu do `foreach`
+genérico que já restaura réplicas (evita a sequência redundante 1→0→1) e ganhou seu próprio bloco:
+escala a 0, confirma a remoção do Pod por poll direto (`-o json`, não `kubectl rollout status` —
+achado do `code-reviewer` antes do commit: `rollout status` foi desenhado pra rollout de template,
+ReplicaSet novo substituindo o antigo, não pra escala dentro do mesmo ReplicaSet, e pode reportar
+sucesso antes do pod velho sair de verdade), escala de volta a 1, confirma `Ready` via
+`rollout status`. Toda chamada `kubectl` do bloco novo confere `$LASTEXITCODE` e usa `throw` com o
+nome de qual falhou — segundo achado do review: sem essa checagem, uma falha silenciosa no
+teardown (ex.: pod demorando mais que o timeout pra sair) contaminaria as execuções seguintes de
+um lote de 60 sem nenhum sinal, a mesma classe de bug que já motivou o retry do `deactivate` do
+caos. Ciclo validado ao vivo contra o cluster real antes do commit (pod antigo removido em ~10s,
+pod novo `Ready` em seguida, `exit code 0` em todas as chamadas).
+
+Com isso, **o ferramental da Fase 12 está pronto para a campanha completa (60 execuções)** — os
+três pilotos exigidos pelo DoD estão feitos (F1/C, F5/C, F3/B) e os dois gaps reais que apareceram
+neles (escopo do `ToggleFeatureFlag`, onset por latência do F3) foram corrigidos e validados ao
+vivo. Falta só decidir quando rodar a campanha de verdade (~20h de máquina dedicada).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
