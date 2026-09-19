@@ -8,6 +8,13 @@ services:
       POSTGRES_USER: norn
       POSTGRES_PASSWORD: norn
       POSTGRES_DB: norn
+    # max_connections default (100) esgotou durante a campanha real (Fase 12): Norn.Worker e
+    # Norn.API sao processos de longa duracao com pool proprio do Npgsql (default 100 cada) que
+    # nao devolve conexao mesmo ociosa - os dois sozinhos ja disputam o limite inteiro contra as
+    # chamadas curtas do Norn.Labeler (reset/init-run/label) a cada execucao. Corrigido nos dois
+    # lados: aqui, mais headroom; nos appsettings.json de Worker/API, "Maximum Pool Size=20" pra
+    # nenhum processo monopolizar o orcamento compartilhado sozinho.
+    command: postgres -c max_connections=300
     ports:
       - "5432:5432"
     volumes:
