@@ -132,10 +132,17 @@ internal sealed partial class AnomalyPipelineBackgroundService(
 
         previousMode = mode;
 
+        // Fase 12 — lido fresco a cada ciclo, mesmo padrão de Mode/PlannerBackend (nunca carregado
+        // de um sinal em buffer, que poderia atravessar a fronteira entre duas execuções da
+        // campanha). Achado do smoke test: sem isto, todo AnomalySignal/AnomalyContext saía com
+        // ExperimentRunId nulo, e o join de Norn.PairedAnalysis (H2) nunca batia com nada.
+        var experimentRunId = await platformConfig.GetCurrentExperimentRunIdAsync(cancellationToken);
+
         foreach (var sample in sampleBuffer.DrainNew())
         {
-            foreach (var signal in detectorEngine.Observe(sample))
+            foreach (var rawSignal in detectorEngine.Observe(sample))
             {
+                var signal = rawSignal with { ExperimentRunId = experimentRunId };
                 LogSignalDetected(logger, signal.MetricName, signal.Target.Service, signal.Severity, mode);
                 await knowledgeStore.SaveAnomalySignalAsync(signal, cancellationToken);
                 // correlationId: AnomalySignal não carrega um próprio — o AnomalyContext que vai
@@ -191,11 +198,17 @@ internal sealed partial class AnomalyPipelineBackgroundService(
         var activeFlags = await ReadActiveFeatureFlagsAsync(cancellationToken);
         var resolvedSignals = await ResolvePodIdentityAsync(service, primaryTarget.Namespace, signals, cancellationToken);
 
+        // Derivado do próprio sinal, não relido fresco do Redis aqui (achado do code-reviewer,
+        // Fase 12): a janela de correlação (~60s) pode atravessar a fronteira entre uma execução
+        // da campanha e a próxima — um valor lido no instante em que a janela fecha poderia
+        // divergir do ExperimentRunId já persistido nos AnomalySignal que compõem este contexto.
+        // Usar signals[0] mantém o contexto sempre consistente com os próprios sinais que o
+        // formam, a mesma fonte que primaryTarget acima já usa.
         var context = ContextCorrelator.BuildContext(
             resolvedSignals,
             contextId: Guid.NewGuid(),
             correlationId: Guid.NewGuid(),
-            experimentRunId: null,
+            experimentRunId: signals[0].ExperimentRunId,
             createdAtUtc: timeProvider.GetUtcNow(),
             topology: topology,
             recentMetrics: recentMetrics,

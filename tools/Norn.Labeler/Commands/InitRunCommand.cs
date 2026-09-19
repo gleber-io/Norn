@@ -40,6 +40,14 @@ public static class InitRunCommand
 
         var store = services.GetRequiredService<IExperimentRunStore>();
         await store.CreateAsync(record, cancellationToken);
+
+        // Achado do smoke test da Fase 12: sem isto, o Norn.Worker nunca sabia qual execução
+        // estava em andamento, e todo AnomalySignal/AnomalyContext saía com ExperimentRunId nulo —
+        // o join de Norn.PairedAnalysis (H2) nunca batia com nada. Label limpa (null) ao final
+        // (ciclo de vida fechado dentro de uma única invocação do run-experiment.ps1).
+        var platformConfig = services.GetRequiredService<IPlatformConfig>();
+        await platformConfig.SetCurrentExperimentRunIdAsync(record.ExperimentRunId, cancellationToken);
+
         Console.WriteLine($"experiment_run_id={record.ExperimentRunId}");
     }
 

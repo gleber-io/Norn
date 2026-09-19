@@ -138,6 +138,11 @@ public static class LabelCommand
         Console.WriteLine($"onset_at_utc={labeling.OnsetAtUtc?.ToString("O") ?? "null"}");
         Console.WriteLine($"recovered_at_utc={labeling.RecoveredAtUtc?.ToString("O") ?? "null"}");
         Console.WriteLine(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"achieved_rps={achievedRps:F2}"));
+
+        // Fecha o ciclo de vida aberto por InitRunCommand — sem isto, o Worker continuaria
+        // carimbando sinais com o run_id desta execução já encerrada até o próximo init-run.
+        var platformConfig = services.GetRequiredService<IPlatformConfig>();
+        await platformConfig.SetCurrentExperimentRunIdAsync(null, cancellationToken);
     }
 
     private static double? TryGetDouble(string[] args, string flag)

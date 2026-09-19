@@ -21,6 +21,7 @@ internal sealed partial class RedisPlatformConfig(
     internal const string ModeKey = "mode";
     internal const string ForecastKey = "forecast";
     internal const string PlannerBackendKey = "plannerBackend";
+    internal const string CurrentExperimentRunIdKey = "currentExperimentRunId";
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(5);
 
     public async Task<PlatformMode> GetModeAsync(CancellationToken cancellationToken)
@@ -119,6 +120,44 @@ internal sealed partial class RedisPlatformConfig(
 
         var subscriber = connectionMultiplexer.GetSubscriber();
         await subscriber.PublishAsync(RedisChannel.Literal(PlatformConfigInvalidationSubscriber.InvalidationChannel), PlannerBackendKey);
+    }
+
+    public async Task<Guid?> GetCurrentExperimentRunIdAsync(CancellationToken cancellationToken)
+    {
+        var cacheKey = CacheKey(CurrentExperimentRunIdKey);
+        if (cache.TryGetValue(cacheKey, out Guid? cached))
+        {
+            return cached;
+        }
+
+        var database = connectionMultiplexer.GetDatabase();
+        var value = await database.StringGetAsync(KeyPrefix + CurrentExperimentRunIdKey);
+
+        // Sem intervenção (uso normal fora de campanha) ou valor corrompido: null, nunca lança —
+        // um Guid ilegível na chave não pode derrubar o ciclo de detecção inteiro.
+        var experimentRunId = value.HasValue && Guid.TryParse(value.ToString(), out var parsed)
+            ? parsed
+            : (Guid?)null;
+
+        Store(cacheKey, experimentRunId);
+        return experimentRunId;
+    }
+
+    /// <summary>Fase 12 — <c>Norn.Labeler init-run</c> grava, <c>label</c> limpa (<c>null</c>) ao final.</summary>
+    public async Task SetCurrentExperimentRunIdAsync(Guid? experimentRunId, CancellationToken cancellationToken)
+    {
+        var database = connectionMultiplexer.GetDatabase();
+        if (experimentRunId is null)
+        {
+            await database.KeyDeleteAsync(KeyPrefix + CurrentExperimentRunIdKey);
+        }
+        else
+        {
+            await database.StringSetAsync(KeyPrefix + CurrentExperimentRunIdKey, experimentRunId.Value.ToString());
+        }
+
+        var subscriber = connectionMultiplexer.GetSubscriber();
+        await subscriber.PublishAsync(RedisChannel.Literal(PlatformConfigInvalidationSubscriber.InvalidationChannel), CurrentExperimentRunIdKey);
     }
 
     private void Store<T>(string cacheKey, T value)

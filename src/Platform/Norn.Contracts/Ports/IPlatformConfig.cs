@@ -57,4 +57,23 @@ public interface IPlatformConfig
 
     /// <summary>Escrita do braço B/C (Fase 12, <c>run-experiment.ps1</c> no reset de estado, tarefa 2a).</summary>
     Task SetPlannerBackendAsync(PlannerBackend backend, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Qual execução de campanha está em andamento agora (Fase 12) — lido por
+    /// <c>Norn.Worker</c> uma vez por ciclo e carimbado em todo <c>AnomalySignal</c>/
+    /// <c>AnomalyContext</c> gerado naquele ciclo. <c>null</c> fora de uma campanha (uso normal
+    /// em produção, sem noção de "execução"). Achado ao vivo (smoke test da Fase 12, sessão de
+    /// acompanhamento): sem isto, <c>ContextCorrelator.BuildContext</c> sempre recebia
+    /// <c>experimentRunId: null</c> hardcoded — <c>Norn.PairedAnalysis</c> (H2) faz inner join em
+    /// cima dessa coluna, então o McNemar pareado saía sempre vazio, silenciosamente, só
+    /// descoberto ao rodar a análise no fim da campanha.
+    /// </summary>
+    Task<Guid?> GetCurrentExperimentRunIdAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Escrita pelo <c>Norn.Labeler</c>: <c>init-run</c> grava o id no início da execução,
+    /// <c>label</c> limpa (<c>null</c>) ao final — ciclo de vida fechado dentro de uma única
+    /// invocação do <c>run-experiment.ps1</c>.
+    /// </summary>
+    Task SetCurrentExperimentRunIdAsync(Guid? experimentRunId, CancellationToken cancellationToken);
 }
