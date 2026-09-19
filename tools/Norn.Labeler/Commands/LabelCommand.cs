@@ -50,7 +50,21 @@ public static class LabelCommand
         var prometheusClient = services.GetRequiredService<PrometheusRangeClient>();
         var errorRateSamples = await prometheusClient.QueryRangeAsync(promQl, windowStart, observationEnd, ScrapeStep, cancellationToken);
 
-        var labeling = OnsetRecoveryCalculator.Calculate(scenario, errorRateSamples, oomKilledAtUtc, f5KillAtUtc);
+        // F3 (gateway lento) pode nunca elevar a taxa de erro acima — as requisições continuam com
+        // sucesso, só mais devagar (achado ao vivo, terceiro piloto da Fase 12). Mesma query do
+        // PrometheusQueryCatalog (Norn.Monitor) duplicada aqui: Norn.Labeler não referencia
+        // Norn.Monitor (§4).
+        // Norn.Contracts também define um MetricSample — precisa do nome completo aqui, o `using
+        // Norn.Labeler.Detection` sozinho não desambigua.
+        IReadOnlyList<Norn.Labeler.Detection.MetricSample>? gatewayLatencySamples = null;
+        if (scenario == OnsetRecoveryCalculator.F3Scenario)
+        {
+            const string gatewayLatencyPromQl =
+                """histogram_quantile(0.99, sum by (le) (rate(norn_shop_payments_gateway_latency_ms_bucket[1m])))""";
+            gatewayLatencySamples = await prometheusClient.QueryRangeAsync(gatewayLatencyPromQl, windowStart, observationEnd, ScrapeStep, cancellationToken);
+        }
+
+        var labeling = OnsetRecoveryCalculator.Calculate(scenario, errorRateSamples, oomKilledAtUtc, f5KillAtUtc, gatewayLatencySamples);
 
         var (achievedRatio, achievedRps) = LoadReportReader.Read(loadReportPath, targetRps, injectionAtUtc);
         var withinLoadTarget = LoadDeliveryChecker.IsWithinTarget(targetRps, achievedRps);

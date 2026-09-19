@@ -127,11 +127,91 @@ public sealed class OnsetRecoveryCalculatorTests
         result.TerminationState.ShouldBe(TerminationState.InvalidNoOnset);
     }
 
-    private static void AddRange(List<MetricSample> samples, DateTimeOffset start, int fromSeconds, int toSeconds, int stepSeconds, double valuePct)
+    [Fact]
+    public void Calculate_F3_LatencyOnsetWithoutErrorRateRising_UsesLatencyTrackForOnsetAndRecovery()
+    {
+        // Caso real do terceiro piloto (F3/braço B): o gateway fica lento, mas as requisições
+        // continuam retornando sucesso — a taxa de erro nunca cruza o limiar.
+        var errorSamples = new List<MetricSample>();
+        AddRange(errorSamples, Epoch, 0, 400, 5, 0.0);
+
+        var latencySamples = new List<MetricSample>();
+        AddRange(latencySamples, Epoch, 0, 60, 5, 100.0);
+        AddRange(latencySamples, Epoch.AddSeconds(60), 60, 100, 5, 600.0); // acima do SLO de 500ms, 40s sustentado
+        AddRange(latencySamples, Epoch.AddSeconds(100), 100, 400, 5, 100.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F3", errorSamples, oomKilledAtUtc: null, f5KillAtUtc: null, latencySamples);
+
+        result.TerminationState.ShouldBe(TerminationState.Recovered);
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+        result.RecoveredAtUtc.ShouldBe(Epoch.AddSeconds(100));
+    }
+
+    [Fact]
+    public void Calculate_F3_ErrorOnsetBeforeLatencyOnset_UsesEarlierErrorTrackForOnsetAndRecovery()
+    {
+        var errorSamples = new List<MetricSample>();
+        AddRange(errorSamples, Epoch, 0, 60, 5, 0.0);
+        AddRange(errorSamples, Epoch.AddSeconds(60), 60, 100, 5, 5.0); // onset por erro em t=60s
+        AddRange(errorSamples, Epoch.AddSeconds(100), 100, 400, 5, 0.0);
+
+        var latencySamples = new List<MetricSample>();
+        AddRange(latencySamples, Epoch, 0, 150, 5, 100.0);
+        // Cruza o SLO bem depois do erro (t=150s) e nunca recupera dentro da janela observada —
+        // se o código usasse esta série por engano na recuperação, o resultado seria
+        // CensoredAtWindowEnd em vez de Recovered.
+        AddRange(latencySamples, Epoch.AddSeconds(150), 150, 400, 5, 600.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F3", errorSamples, oomKilledAtUtc: null, f5KillAtUtc: null, latencySamples);
+
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+        result.TerminationState.ShouldBe(TerminationState.Recovered);
+        result.RecoveredAtUtc.ShouldBe(Epoch.AddSeconds(100));
+    }
+
+    [Fact]
+    public void Calculate_ScenarioOtherThanF3_IgnoresGatewayLatencySamples()
+    {
+        var errorSamples = new List<MetricSample>();
+        AddRange(errorSamples, Epoch, 0, 400, 5, 0.0);
+
+        // Latência alta o suficiente para onsetar se fosse F3 — não deve ter efeito nenhum aqui.
+        var latencySamples = new List<MetricSample>();
+        AddRange(latencySamples, Epoch, 0, 400, 5, 600.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F1", errorSamples, oomKilledAtUtc: null, f5KillAtUtc: null, latencySamples);
+
+        result.TerminationState.ShouldBe(TerminationState.InvalidNoOnset);
+    }
+
+    [Fact]
+    public void Calculate_F3_ErrorAndLatencyOnsetExactTie_ErrorTrackWinsRecovery()
+    {
+        // Empate exato plausível de verdade: um timeout de gateway tende a gerar 5xx e latência
+        // alta na mesma amostra. Sem desempate explícito a favor do erro, EarliestNonNull devolveria
+        // a via de latência (que aqui nunca recupera) e o resultado sairia CensoredAtWindowEnd por
+        // engano — achado do code-reviewer antes do commit.
+        var errorSamples = new List<MetricSample>();
+        AddRange(errorSamples, Epoch, 0, 60, 5, 0.0);
+        AddRange(errorSamples, Epoch.AddSeconds(60), 60, 100, 5, 5.0); // onset por erro em t=60s
+        AddRange(errorSamples, Epoch.AddSeconds(100), 100, 400, 5, 0.0); // recupera em t=100s
+
+        var latencySamples = new List<MetricSample>();
+        AddRange(latencySamples, Epoch, 0, 60, 5, 100.0);
+        AddRange(latencySamples, Epoch.AddSeconds(60), 60, 400, 5, 600.0); // onset também em t=60s, nunca recupera
+
+        var result = OnsetRecoveryCalculator.Calculate("F3", errorSamples, oomKilledAtUtc: null, f5KillAtUtc: null, latencySamples);
+
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+        result.TerminationState.ShouldBe(TerminationState.Recovered);
+        result.RecoveredAtUtc.ShouldBe(Epoch.AddSeconds(100));
+    }
+
+    private static void AddRange(List<MetricSample> samples, DateTimeOffset start, int fromSeconds, int toSeconds, int stepSeconds, double value)
     {
         for (var t = fromSeconds; t < toSeconds; t += stepSeconds)
         {
-            samples.Add(new MetricSample(start.AddSeconds(t - fromSeconds), valuePct));
+            samples.Add(new MetricSample(start.AddSeconds(t - fromSeconds), value));
         }
     }
 }
