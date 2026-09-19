@@ -113,7 +113,7 @@ if (-not $SkipWorkerManagement) {
     }
 
     Step "Subindo Norn.Worker (unico para os $($pendingRows.Count) execucoes deste lote)"
-    $workerLogPath = Join-Path $repoRoot "tools/analysis/data/worker-campaign.log"
+    $workerLogPath = "C:\git\norn-results\logs\worker-campaign.log"
     New-Item -ItemType Directory -Force -Path (Split-Path $workerLogPath) | Out-Null
     $workerProcess = Start-Process -FilePath "dotnet" -ArgumentList "run", "--project", "src/Platform/Norn.Worker" `
         -WorkingDirectory $repoRoot -RedirectStandardOutput $workerLogPath -RedirectStandardError "$workerLogPath.err" `
@@ -156,10 +156,47 @@ try {
         if ($BackupAfterEachBlock -and ($blockCounter % 3 -eq 0)) {
             Step "Fim de bloco -- backup do Knowledge (tarefa 3b)"
             & (Join-Path $PSScriptRoot "dump-knowledge.ps1")
+
+            # Captura dos paineis do Grafana (visao mais longa que o Prometheus por execucao ja
+            # cobre) -- best-effort, mesmo motivo do capture da run-experiment.ps1: nao pode
+            # derrubar um lote de 60 execucoes por causa de um screenshot.
+            try {
+                node (Join-Path $repoRoot "tools/PanelCapture/capture.js") `
+                    --out "C:\git\norn-results\screenshots\blocks" `
+                    --mode block `
+                    --label "bloco-$blockCounter"
+            } catch {
+                Write-Warning "Captura de paineis do bloco falhou (nao bloqueante): $_"
+            }
         }
     }
 
     Step "Lote concluido: $($pendingRows.Count) execucoes."
+
+    # --- Consolidacao final: copia os artefatos da campanha para fora do repositorio ---------
+    # C:\git\norn-results e o unico lugar que reune tudo que o TCC precisa depois (logs, CSVs,
+    # screenshots, backups do Postgres) -- os CSVs continuam vivendo em tools/analysis/data/
+    # tambem (fonte de verdade, versionada no git quando a campanha fechar); isto e so uma copia.
+    # try/catch (achado do code-reviewer antes do commit): sem isso, uma falha aqui (permissao,
+    # disco) e erro de cmdlet -- respeita o $ErrorActionPreference = "Stop" do topo do script,
+    # ao contrario de node/ollama -- e reportaria falha no fim de um lote de ~25h que na pratica
+    # terminou com sucesso, so por causa de uma copia de conveniencia.
+    Step "Copiando CSVs da campanha para C:\git\norn-results\campaign-data"
+    try {
+        $resultsDataDir = "C:\git\norn-results\campaign-data"
+        New-Item -ItemType Directory -Force -Path $resultsDataDir | Out-Null
+        foreach ($csv in @("labeled-runs.csv", "discarded-runs.csv")) {
+            $source = Join-Path $repoRoot "tools/analysis/data/$csv"
+            if (Test-Path $source) { Copy-Item $source $resultsDataDir -Force }
+        }
+        if (Test-Path $manifestPath) { Copy-Item $manifestPath $resultsDataDir -Force }
+        $loadReportsSource = Join-Path $repoRoot "tools/analysis/data/load-reports"
+        if (Test-Path $loadReportsSource) {
+            Copy-Item $loadReportsSource (Join-Path $resultsDataDir "load-reports") -Recurse -Force
+        }
+    } catch {
+        Write-Warning "Copia final dos CSVs falhou (nao bloqueante -- originais continuam em tools/analysis/data/): $_"
+    }
 }
 finally {
     if ($workerProcess -and -not $workerProcess.HasExited) {

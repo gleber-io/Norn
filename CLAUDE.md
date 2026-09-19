@@ -9,8 +9,9 @@ deploy/bootstrap.ps1            # infra + observabilidade + cluster k3d + Shop, 
 kubectl get pods -n norn-shop
 deploy/run-experiment.ps1       # uma execução da campanha (Fase 12) — reset/warmup/carga/injeção/coleta
 deploy/run-campaign.ps1         # a matriz inteira (60 execuções), blocos aleatorizados (Fase 12)
-deploy/dump-knowledge.ps1       # backup do Knowledge, fora do VHDX do WSL2 (Fase 12, tarefa 3b)
+deploy/dump-knowledge.ps1       # backup do Knowledge -> C:\git\norn-results\postgres-backups (Fase 12, tarefa 3b)
 tools/analysis/.venv/Scripts/python.exe tools/analysis/analyze.py --labeled <csv> --out-dir <dir>
+tools/PanelCapture/ npm install # uma vez, antes da campanha — screenshots (dashboard/Grafana/Prometheus) -> C:\git\norn-results
 ```
 
 ## Arquitetura em 10 linhas
@@ -1326,7 +1327,66 @@ pod novo `Ready` em seguida, `exit code 0` em todas as chamadas).
 Com isso, **o ferramental da Fase 12 está pronto para a campanha completa (60 execuções)** — os
 três pilotos exigidos pelo DoD estão feitos (F1/C, F5/C, F3/B) e os dois gaps reais que apareceram
 neles (escopo do `ToggleFeatureFlag`, onset por latência do F3) foram corrigidos e validados ao
-vivo. Falta só decidir quando rodar a campanha de verdade (~20h de máquina dedicada).
+vivo. Falta só decidir quando rodar a campanha de verdade.
+
+**Correção de conta, achada ao revisar a estimativa de duração:** "~20h de máquina" (texto desde a
+sessão que criou o ferramental) nunca bateu com o próprio `DurationMinutes = 25` default que essa
+mesma sessão fixou — 60 × 25 min = 1.500 min = **25h**, não 20h. A estimativa "~17h a ~18 min" já
+tinha sido corrigida uma vez no Master Plan por essa mesma inconsistência (§3); esta é a mesma
+categoria de erro, só que introduzida depois da correção anterior. **A duração real da campanha é
+~25-26h de máquina dedicada**, não ~20h — todo lugar que cita "~20h" neste arquivo é a mesma
+estimativa desatualizada, não uma medição nova.
+
+**Captura de resultados para o TCC — `C:\git\norn-results\`, fora do repositório git (sessão de
+acompanhamento seguinte).** Até aqui os artefatos da campanha ficavam espalhados: dump do Postgres
+em `C:\norn-backups` (default antigo do `dump-knowledge.ps1`, sem relação com o resto), CSVs dentro
+do repo em `tools/analysis/data/`, e a série crua do Prometheus nunca capturada em lugar nenhum —
+só existe enquanto o container `norn-prometheus` estiver de pé. Consolidado num único destino, no
+mesmo espírito de `C:\git\norn-plano` (irmão do repositório, nunca commitado):
+
+```
+C:\git\norn-results\
+  postgres-backups\     <- dump-knowledge.ps1 (default mudou de C:\norn-backups pra cá)
+  logs\                 <- console do Norn.Worker do lote (run-campaign.ps1)
+  screenshots\
+    executions\          <- 1 par de PNGs por execução (dashboard + gráfico Prometheus da assinatura)
+    blocks\               <- 1 trio de PNGs por bloco de 3 execuções (dashboard + 2 dashboards do Grafana)
+  campaign-data\         <- cópia de labeled-runs.csv/discarded-runs.csv/campaign-manifest.csv/load-reports/
+```
+
+**`tools/PanelCapture/`** (Node + Playwright, novo — mesmo espírito de `tools/analysis/` em Python:
+ferramental de campanha, fora do build .NET principal, com dependência própria versionada em
+`package-lock.json`). `capture.js` é um CLI best-effort: cada captura individual é `try/catch` e o
+processo sempre sai com código 0 — perder um screenshot não pode custar uma execução de ~25 min nem
+um lote de 60. Dois modos:
+- `--mode execution` (chamado por `run-experiment.ps1`, depois do `Norn.Labeler label`, antes do
+  teardown): screenshot do dashboard do Norn + gráfico do Prometheus (aba "Graph", selecionada por
+  clique via Playwright — os parâmetros de URL `g0.tab=N` do Prometheus atual não trocam a aba
+  sozinhos, achado ao testar ao vivo) da métrica-assinatura do cenário (`$targets[$Scenario].SignatureExpr`,
+  novo campo na mesma tabela de alvos que já existia: RSS pra F1, p99 pra F2, latência do gateway
+  pra F3, taxa de 5xx pra F5 — a mesma pergunta "o que conta a história deste cenário" que já orienta
+  o resto do arquivo).
+- `--mode block` (chamado por `run-campaign.ps1`, no mesmo ponto que já chama `dump-knowledge.ps1`
+  a cada 3 execuções): screenshot do dashboard do Norn + dos dois dashboards provisionados do
+  Grafana (`norn-platform`, `shop-overview`) — visão mais longa, complementar ao Prometheus por
+  execução.
+
+`run-campaign.ps1` também passou a copiar os CSVs consolidados (`labeled-runs.csv`,
+`discarded-runs.csv`, `campaign-manifest.csv`, `load-reports/`) pra `campaign-data\` ao fim do lote
+inteiro — cópia, não fonte de verdade: os originais continuam em `tools/analysis/data/`, versionados
+no git quando a campanha fechar (regra já existente).
+
+**Pré-requisito único, não automatizado**: `npm install` dentro de `tools/PanelCapture/` uma vez,
+antes da campanha — mesmo padrão do `.venv` do `tools/analysis/` (`node_modules/` é git-ignorado
+globalmente). O Chromium do Playwright precisa estar instalado (`npx playwright install chromium`,
+Fase 11 já deixou isso em cache nesta máquina).
+
+**Validado ao vivo, ponta a ponta, antes do commit**: os dois modos rodados contra o cluster/infra
+reais (dashboard com dado de sessões anteriores, os dois dashboards do Grafana, um gráfico real de
+`dotnet_process_memory_working_set_bytes` do Catalog mostrando o padrão dente-de-serra de várias
+execuções de F1 anteriores) e o `dump-knowledge.ps1` com o destino novo (dump de 32,5 MB gerado em
+`C:\git\norn-results\postgres-backups\`). Artefatos de teste removidos depois — a pasta nasce vazia
+de novo na próxima execução real (`New-Item -Force` em todo os três scripts).
 
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)

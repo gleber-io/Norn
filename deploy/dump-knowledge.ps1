@@ -9,10 +9,12 @@
     uma pasta fora do WSL2 (default C:\norn-backups\), nomeado com data e hora.
 
 .PARAMETER OutputDirectory
-    Pasta fora do VHDX do WSL2. Default C:\norn-backups.
+    Pasta fora do VHDX do WSL2. Default C:\git\norn-results\postgres-backups -- mesma pasta
+    consolidada dos demais artefatos da campanha (logs, screenshots, CSVs), pra tudo que o TCC
+    precisa depois ficar num lugar só, fora do repositório git (nunca versionado).
 #>
 param(
-    [string]$OutputDirectory = "C:\norn-backups"
+    [string]$OutputDirectory = "C:\git\norn-results\postgres-backups"
 )
 
 $ErrorActionPreference = "Stop"

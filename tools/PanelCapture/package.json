@@ -1,0 +1,10 @@
+{
+  "name": "norn-panel-capture",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Fase 12 - captura screenshots do dashboard, Grafana e Prometheus para C:\\git\\norn-results (ferramental de campanha, fora do build principal, mesmo espirito de tools/analysis em Python).",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

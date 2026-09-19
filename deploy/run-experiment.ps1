@@ -78,11 +78,24 @@ function Step($message) {
 }
 
 # --- Alvo por cenário (§3) --------------------------------------------------------------
+# SignatureExpr: PromQL da métrica que melhor conta a história de cada cenário (Fase 12, captura
+# de resultados) -- usada só pro screenshot do Prometheus ao fim da execução, nunca pelo Labeler
+# (que tem sua própria query, em Norn.Labeler/Commands/LabelCommand.cs -- para F3/F5 é
+# deliberadamente a mesma string; se o critério de onset mudar lá, atualizar aqui também).
+# Aspas simples nos matchers de label (PromQL aceita as duas formas) -- aspas duplas quebrariam
+# ao atravessar PowerShell -> argv do processo nativo `node`, o mesmo achado já documentado pro
+# `kubectl -o jsonpath` (achado do code-reviewer antes do commit: o parser não converte, mas o
+# Prometheus aceita a query malformada e a página carrega normalmente, então o problema não
+# apareceria como falha no log -- só como gráfico vazio na figura do TCC).
 $targets = @{
-    F1 = @{ Deployment = "catalog-api"; AdminBaseUrl = "http://localhost:8080"; ExportedJob = "Norn.Shop.Catalog.API" }
-    F2 = @{ Deployment = "order-api";   AdminBaseUrl = "http://localhost:8081"; ExportedJob = "Norn.Shop.Order.API" }
-    F3 = @{ Deployment = "payment-api"; AdminBaseUrl = "http://localhost:8082"; ExportedJob = "Norn.Shop.Payment.API" }
-    F5 = @{ Deployment = "catalog-api"; AdminBaseUrl = "http://localhost:8080"; ExportedJob = "Norn.Shop.Catalog.API" }
+    F1 = @{ Deployment = "catalog-api"; AdminBaseUrl = "http://localhost:8080"; ExportedJob = "Norn.Shop.Catalog.API";
+            SignatureExpr = "dotnet_process_memory_working_set_bytes{exported_job='Norn.Shop.Catalog.API'}" }
+    F2 = @{ Deployment = "order-api";   AdminBaseUrl = "http://localhost:8081"; ExportedJob = "Norn.Shop.Order.API";
+            SignatureExpr = "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{exported_job='Norn.Shop.Order.API'}[1m])))" }
+    F3 = @{ Deployment = "payment-api"; AdminBaseUrl = "http://localhost:8082"; ExportedJob = "Norn.Shop.Payment.API";
+            SignatureExpr = "histogram_quantile(0.99, sum by (le) (rate(norn_shop_payments_gateway_latency_ms_bucket[1m])))" }
+    F5 = @{ Deployment = "catalog-api"; AdminBaseUrl = "http://localhost:8080"; ExportedJob = "Norn.Shop.Catalog.API";
+            SignatureExpr = "100 * sum(rate(http_server_request_duration_seconds_count{exported_job='Norn.Shop.Catalog.API', http_response_status_code=~'5..'}[30s])) / sum(rate(http_server_request_duration_seconds_count{exported_job='Norn.Shop.Catalog.API'}[30s]))" }
 }
 $target = $targets[$Scenario]
 $targetRps = ($TargetBaseRps + $TargetPeakRps) / 2
@@ -405,6 +418,23 @@ $labelArgs = @(
 if ($null -ne $cpuClockAvgMhz) { $labelArgs += @("--cpu-clock-avg-mhz", $cpuClockAvgMhz) }
 dotnet @labelArgs
 if ($LASTEXITCODE -ne 0) { throw "Norn.Labeler label falhou" }
+
+# --- Captura de resultados (Fase 12): screenshot do dashboard + gráfico da assinatura --------
+# Best-effort de propósito: perder um screenshot não pode custar uma execução de campanha inteira.
+# node_modules precisa de `npm install` prévio em tools/PanelCapture/ (uma vez, como o .venv do
+# tools/analysis) -- se faltar, o catch abaixo só avisa e segue.
+Step "Capturando screenshots (dashboard + Prometheus) para C:\git\norn-results"
+try {
+    $captureLabel = "$Scenario-$Arm-rep$Repetition-run$RunOrder"
+    node tools/PanelCapture/capture.js `
+        --out "C:\git\norn-results\screenshots\executions" `
+        --mode execution `
+        --prom-expr $target.SignatureExpr `
+        --prom-range "20m" `
+        --label $captureLabel
+} catch {
+    Write-Warning "Captura de screenshots falhou (não bloqueante): $_"
+}
 
 # --- Teardown final: ambiente limpo para a próxima execução -------------------------------
 Step "Restaurando réplicas ao baseline"
