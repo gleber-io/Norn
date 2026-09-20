@@ -64,7 +64,22 @@ public static class LabelCommand
             gatewayLatencySamples = await prometheusClient.QueryRangeAsync(gatewayLatencyPromQl, windowStart, observationEnd, ScrapeStep, cancellationToken);
         }
 
-        var labeling = OnsetRecoveryCalculator.Calculate(scenario, errorRateSamples, oomKilledAtUtc, f5KillAtUtc, gatewayLatencySamples);
+        // F2 (esgotamento de pool do Order.API) pode nunca elevar a taxa de erro — a requisição
+        // espera na fila e ainda assim retorna sucesso, só mais devagar (achado ao vivo, campanha
+        // real da Fase 12: 13 de 15 execuções saíram InvalidNoOnset porque a assinatura fechada do
+        // F2 é latência p99/profundidade de fila, docs/metrics-matrix.md, nunca taxa de erro).
+        // Multiplicado por 1000 porque http_server_request_duration_seconds_bucket é em segundos
+        // (convenção OTel), e o SLO/o comparador em OnsetRecoveryCalculator são em ms, mesma
+        // unidade que a latência do gateway do F3.
+        IReadOnlyList<Norn.Labeler.Detection.MetricSample>? orderApiLatencySamples = null;
+        if (scenario == OnsetRecoveryCalculator.F2Scenario)
+        {
+            var orderApiLatencyPromQl =
+                $"1000 * histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{{exported_job=\"{targetService}\"}}[1m])))";
+            orderApiLatencySamples = await prometheusClient.QueryRangeAsync(orderApiLatencyPromQl, windowStart, observationEnd, ScrapeStep, cancellationToken);
+        }
+
+        var labeling = OnsetRecoveryCalculator.Calculate(scenario, errorRateSamples, oomKilledAtUtc, f5KillAtUtc, gatewayLatencySamples, orderApiLatencySamples);
 
         var (achievedRatio, achievedRps) = LoadReportReader.Read(loadReportPath, targetRps, injectionAtUtc);
         var withinLoadTarget = LoadDeliveryChecker.IsWithinTarget(targetRps, achievedRps);

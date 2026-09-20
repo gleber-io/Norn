@@ -207,6 +207,84 @@ public sealed class OnsetRecoveryCalculatorTests
         result.RecoveredAtUtc.ShouldBe(Epoch.AddSeconds(100));
     }
 
+    [Fact]
+    public void Calculate_F2_LatencyOnsetWithoutErrorRateRising_UsesLatencyTrackForOnsetAndRecovery()
+    {
+        // Caso real da campanha da Fase 12: o Order.API enfileira sob esgotamento de pool, mas as
+        // requisições continuam retornando sucesso — a taxa de erro nunca cruza o limiar.
+        var errorSamples = new List<MetricSample>();
+        AddRange(errorSamples, Epoch, 0, 400, 5, 0.0);
+
+        var latencySamples = new List<MetricSample>();
+        AddRange(latencySamples, Epoch, 0, 60, 5, 100.0);
+        AddRange(latencySamples, Epoch.AddSeconds(60), 60, 100, 5, 450.0); // acima do SLO de 300ms, 40s sustentado
+        AddRange(latencySamples, Epoch.AddSeconds(100), 100, 400, 5, 100.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F2", errorSamples, oomKilledAtUtc: null, f5KillAtUtc: null, gatewayLatencyMsSamples: null, orderApiLatencyMsSamples: latencySamples);
+
+        result.TerminationState.ShouldBe(TerminationState.Recovered);
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+        result.RecoveredAtUtc.ShouldBe(Epoch.AddSeconds(100));
+    }
+
+    [Fact]
+    public void Calculate_F2_ErrorOnsetBeforeLatencyOnset_UsesEarlierErrorTrackForOnsetAndRecovery()
+    {
+        var errorSamples = new List<MetricSample>();
+        AddRange(errorSamples, Epoch, 0, 60, 5, 0.0);
+        AddRange(errorSamples, Epoch.AddSeconds(60), 60, 100, 5, 5.0); // onset por erro em t=60s
+        AddRange(errorSamples, Epoch.AddSeconds(100), 100, 400, 5, 0.0);
+
+        var latencySamples = new List<MetricSample>();
+        AddRange(latencySamples, Epoch, 0, 150, 5, 100.0);
+        // Cruza o SLO bem depois do erro (t=150s) e nunca recupera dentro da janela observada — se
+        // o código usasse esta série por engano na recuperação, o resultado seria
+        // CensoredAtWindowEnd em vez de Recovered.
+        AddRange(latencySamples, Epoch.AddSeconds(150), 150, 400, 5, 450.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F2", errorSamples, oomKilledAtUtc: null, f5KillAtUtc: null, gatewayLatencyMsSamples: null, orderApiLatencyMsSamples: latencySamples);
+
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+        result.TerminationState.ShouldBe(TerminationState.Recovered);
+        result.RecoveredAtUtc.ShouldBe(Epoch.AddSeconds(100));
+    }
+
+    [Fact]
+    public void Calculate_ScenarioOtherThanF2_IgnoresOrderApiLatencySamples()
+    {
+        var errorSamples = new List<MetricSample>();
+        AddRange(errorSamples, Epoch, 0, 400, 5, 0.0);
+
+        // Latência alta o suficiente para onsetar se fosse F2 — não deve ter efeito nenhum aqui.
+        var latencySamples = new List<MetricSample>();
+        AddRange(latencySamples, Epoch, 0, 400, 5, 450.0);
+
+        var result = OnsetRecoveryCalculator.Calculate("F1", errorSamples, oomKilledAtUtc: null, f5KillAtUtc: null, gatewayLatencyMsSamples: null, orderApiLatencyMsSamples: latencySamples);
+
+        result.TerminationState.ShouldBe(TerminationState.InvalidNoOnset);
+    }
+
+    [Fact]
+    public void Calculate_F2_ErrorAndLatencyOnsetExactTie_ErrorTrackWinsRecovery()
+    {
+        // Mesmo empate exato do F3 (achado do code-reviewer: a lógica de desempate foi
+        // generalizada para os dois cenários, e precisa da mesma cobertura para o F2 também).
+        var errorSamples = new List<MetricSample>();
+        AddRange(errorSamples, Epoch, 0, 60, 5, 0.0);
+        AddRange(errorSamples, Epoch.AddSeconds(60), 60, 100, 5, 5.0); // onset por erro em t=60s
+        AddRange(errorSamples, Epoch.AddSeconds(100), 100, 400, 5, 0.0); // recupera em t=100s
+
+        var latencySamples = new List<MetricSample>();
+        AddRange(latencySamples, Epoch, 0, 60, 5, 100.0);
+        AddRange(latencySamples, Epoch.AddSeconds(60), 60, 400, 5, 450.0); // onset também em t=60s, nunca recupera
+
+        var result = OnsetRecoveryCalculator.Calculate("F2", errorSamples, oomKilledAtUtc: null, f5KillAtUtc: null, gatewayLatencyMsSamples: null, orderApiLatencyMsSamples: latencySamples);
+
+        result.OnsetAtUtc.ShouldBe(Epoch.AddSeconds(60));
+        result.TerminationState.ShouldBe(TerminationState.Recovered);
+        result.RecoveredAtUtc.ShouldBe(Epoch.AddSeconds(100));
+    }
+
     private static void AddRange(List<MetricSample> samples, DateTimeOffset start, int fromSeconds, int toSeconds, int stepSeconds, double value)
     {
         for (var t = fromSeconds; t < toSeconds; t += stepSeconds)
