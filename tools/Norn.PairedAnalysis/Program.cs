@@ -73,7 +73,7 @@ await using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
 
 var rawAgreement = rows.Count == 0 ? 0.0 : (double)rows.Count(r => r.LlmAction == r.RuleAction) / rows.Count;
 Console.WriteLine($"pares={rows.Count}");
-Console.WriteLine($"concordancia_bruta_llm_regra={rawAgreement:F4}");
+Console.WriteLine(string.Create(CultureInfo.InvariantCulture, $"concordancia_bruta_llm_regra={rawAgreement:F4}"));
 Console.WriteLine($"csv={Path.GetFullPath(outputPath)}");
 
 static string? GetSetting(string[] args, string flag)
