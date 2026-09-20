@@ -2,3 +2,19 @@ experiment_run_id,scenario,arm,repetition,reason,detail
 15b7b5d8-1335-4f64-bff2-137e5f17b809,F1,C,1,InvalidInstrumentation,achieved_rps=6.07 fora de ±10 % de target_rps=11.00
 dae2b5fd-bee1-4c21-9a19-47854a6b5e1e,F1,C,1,InvalidInstrumentation,achieved_rps=6.49 fora de ±10 % de target_rps=11.00
 1ab4b373-1e51-48ce-90a0-e655a5c2a5ca,F3,B,1,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+78c87234-54e5-413b-8820-0349914c39db,F3,C,5,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+7152ba7b-6bd1-4da6-8ee1-86d8be43867d,F2,C,1,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+67e4fb85-8de2-4fe5-b22c-d40d67dc3bba,F3,B,4,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+7fd80317-989d-4bd4-8ed2-49b17178299d,F2,C,3,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+31256e94-6f00-4b0f-82a5-95c1e180dbb9,F2,B,3,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+c0f6eeca-17b4-450f-8fdf-dfe6376d9def,F2,A,3,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+0eeafb28-c192-4fe9-8865-4fa91538dcac,F2,C,2,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+39ff9fc4-50ee-4851-be93-1430cfc0e37d,F2,A,2,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+9225f3a3-b034-48f5-83a2-e6cce1849801,F2,B,2,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+be83c9e3-bf4b-45ef-930f-ae0597c01f5b,F3,C,3,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+7f30c02b-8d9b-475f-bcdb-2f6d83222376,F2,B,5,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+1f6a6dc0-bc8e-4cb4-955f-d3d6dbeb0523,F2,A,5,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+0960a3d1-a61e-45be-81f3-057eeebe5f3a,F2,C,5,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+c7776b18-71ec-46a3-9505-4d943ac679f4,F2,B,4,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+ecb7522d-22cd-49f5-8346-3fc803577e87,F2,A,4,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
+474370ef-4203-4ddb-901e-264909733902,F2,C,4,InvalidNoOnset,Nenhuma amostra cruzou o limiar de onset dentro do intervalo observado.
