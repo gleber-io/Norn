@@ -1471,6 +1471,130 @@ Fase 12 está pronto para a campanha completa de 60 execuções** — falta só 
 observar a taxa de `InvalidNoOnset` de F2 nas primeiras repetições reais antes de assumir que o
 cenário está bem calibrado.
 
+**Campanha real de 60 execuções disparada e concluída — Fase 12 fechada, DoD integral atendido com
+duas divergências conscientes e documentadas.** Rodada com `-MasterSeed 20260919`, tag de
+congelamento `campaign-h1h2`.
+
+**O Windows travou completamente durante a campanha (execução 20/60, F2/B/repetição 3) e precisou
+de reboot manual.** Sessão de acompanhamento seguinte: confirmado via consulta direta ao Postgres
+que 19 execuções já tinham fechado (15 válidas + 4 `InvalidNoOnset`) antes do crash; a execução 20
+ficou com `termination_state` nulo (interrompida) e foi removida do `experiment_runs` como órfã,
+mesmo padrão já usado nos dois crashes anteriores desta fase.
+
+**Recuperação do ambiente pós-crash revelou uma causa nova, mais profunda que o padrão usual de
+`host.k3d.internal` perdido no CoreDNS.** `k3d cluster stop`/`start` (o fix padrão) logou sucesso
+mas **não** reinjetou o registro — `NodeHosts` continuava sem a entrada. Corrigido manualmente via
+`kubectl patch configmap coredns`, mas isso só resolveu a resolução de nome: a conexão TCP de dentro
+do cluster para `172.19.0.1:5432`/`6379` (o gateway da rede `k3d-norn`) continuava travando, mesmo
+com `ping` funcionando — a NAT hairpin da bridge do Docker Desktop ficou corrompida pelo crash não
+limpo, e nem restart do processo do Docker Desktop nem um primeiro `wsl --shutdown` resolveram
+(o segundo `wsl --shutdown`, feito depois de matar à força processos `docker` CLI presos de
+diagnósticos anteriores, resolveu). **Achado que vale reter**: `host.docker.internal`
+(`192.168.65.254`, a rota interna do Docker Desktop, diferente do gateway da bridge) sobreviveu à
+corrupção quando o gateway não sobreviveu — o contorno foi apontar `host.k3d.internal` pra esse IP
+em vez do gateway padrão. Réplicas fora do baseline (`catalog-api`/`order-api` em 2) e resíduo no
+Redis (`norn:chaos:active` de F2 ainda ligado, `currentExperimentRunId` apontando pra uma execução
+já finalizada — Redis restaurou de um snapshot RDB anterior ao crash) limpos manualmente antes de
+retomar com `-StartFromRunOrder 20`.
+
+**Preferência do usuário durante o acompanhamento**: reportar o progresso da campanha a cada
+execução concluída, não em blocos de 5 como pedido inicialmente — a demora de horas entre blocos
+tornava o retorno impreciso demais pra acompanhar de perto. Registrado em memória para sessões
+futuras.
+
+**Achado ao vivo durante a retomada: F2 chegou a 87% de descarte (13 de 15 `InvalidNoOnset`) —
+não era má calibração, era o mesmo bug estrutural que o F3 já teve e corrigimos antes.**
+`Norn.Labeler` só detectava onset via taxa de 5xx sustentada, mas a assinatura fechada do F2
+(`docs/metrics-matrix.md`) é latência p99/profundidade de fila do Order.API, nunca taxa de erro —
+esgotamento de pool faz a requisição esperar, não necessariamente falhar. Confirmado ao vivo contra
+o Prometheus real antes de tocar em código: a latência p99 do Order.API numa das execuções
+descartadas chegava a 0,47s (acima do SLO de 300ms) exatamente na janela que o Labeler nunca olhou.
+Corrigido generalizando pro F2 a mesma via de onset por latência sustentada que o F3 já tinha em
+`OnsetRecoveryCalculator` (nova constante `F2Scenario`/`OrderApiLatencySloMs=300ms`, mesmo
+desempate a favor da taxa de erro em caso de empate exato) — 3 testes novos espelhando os do F3,
+mais um quarto achado pelo `code-reviewer` (faltava o teste de empate exato pro F2, que o F3 já
+tinha desde a correção anterior). **As 13 execuções descartadas foram re-rotuladas contra o dado já
+retido no Prometheus (retenção de 15GB/15d, campanha inteira bem dentro da janela) — sem nenhuma
+execução nova, sem gastar hora de máquina.** Todas as 13 fecharam `Recovered`. F2 foi de 13% para
+**100% de dado válido**. A tag `campaign-h1h2` foi movida três vezes ao longo da sessão — a primeira
+apontava pro commit de antes do fix de conexões do Postgres (Fase 12 anterior), que é o código que
+de fato rodou a campanha real.
+
+**Resultado final da campanha: 57 de 60 execuções válidas (95%)** — F1 15/15, F2 15/15 (depois do
+fix), F3 12/15, F5 15/15. As 3 `InvalidNoOnset` remanescentes (todas F3) não mostraram o mesmo
+padrão do achado do F2 — a série de latência do gateway tinha poucas amostras não-`NaN` nessas
+janelas especificamente (indício de tráfego insuficiente ao Payment.API naquela execução, não um
+sinal ignorado). **Decisão consciente: não investigado mais a fundo, aceito como descarte legítimo
+em vez de voltar à Fase 5 para recalibrar** — diverge da letra do DoD ("nenhuma `InvalidNoOnset`
+remanescente"), documentado como tal em `docs/experiments/results.md`, não escondido.
+
+**Backup verificado com um passo além do runbook (§9.6 do plano-campanha.md).** Não só restaurado
+num banco de teste isolado (`norn_restore_test`, no mesmo container, depois apagado) com contagens
+conferidas contra o banco real — o `Norn.PairedAnalysis` inteiro rodou contra o dump restaurado
+antes de rodar contra produção, provando que a análise é reprocessável a partir do backup, não só
+que o `pg_dump` restaura. Achado colateral: `Console.WriteLine` da concordância bruta usava a
+cultura da thread (pt-BR, vírgula) em vez de `InvariantCulture` — mesma classe de bug já corrigida
+antes no `Norn.Labeler` — corrigido no `Norn.PairedAnalysis` também.
+
+**Métricas complementares do DoD (MTTD, latência do loop em quatro etapas, taxa de ação
+esperada/eficaz em ITT e por protocolo, taxa de fallback do LLM por motivo) não existiam em código
+nenhum — construídas do zero nesta sessão.** `tools/analysis/campaign_metrics.py` (novo módulo
+Python, 24 testes) lê três CSV extraídos do Knowledge via `tools/analysis/export-campaign-metrics.sql`
+(três consultas, versionadas — reproduzem os mesmos números byte a byte, verificado antes de
+confiar no script). Sem ferramenta .NET dedicada: são consultas de leitura pura, mesmo raciocínio
+que já isenta `tools/analysis/` de ser código de produto.
+
+**Dois achados reais pegos pelo `code-reviewer` antes de qualquer número ir pro `results.md` —
+os dois teriam produzido números plausíveis e silenciosamente errados:**
+1. **`HealingPlan.DecidedBy == Fallback` não significa "o LLM falhou".** O braço C usa o mesmo
+   valor quando o `RuleEngine` rejeita a própria ação candidata por pré-condição — sem LLM nenhum
+   envolvido (`RuleEngine.Decide`, `decidedBy = accepted ? RuleEngine : Fallback`). Pior: uma falha
+   real do LLM pode terminar com `DecidedBy: RuleEngine` (não `Fallback`) sempre que o fallback do
+   `RuleEngine` for aceito — `LlmPlanner.FallBackToRuleEngine` preserva o `DecidedBy` da chamada
+   interna a `RuleEngine.Decide`, só troca o `LlmTrace`. O sinal correto de falha do LLM é
+   `LlmTrace.FailureReasons` não vazio, independente do `DecidedBy` final — é esse campo que separa
+   ITT de "por protocolo" em toda a análise, não `decided_by`.
+2. **`HealingActionExecutor` trata `NoOp` como curto-circuito e devolve `Succeeded`/
+   `SloRestored=false` sempre, mesmo sem tocar o cluster** — exatamente o risco que o próprio
+   Master Plan §5.4 já nomeava ("ação sem efeito real... contamina a taxa de ação eficaz"). Sem
+   excluir `NoOp` do denominador, a taxa de ação eficaz do braço C saía **12,6%**; excluindo,
+   **59,7%** — quase 5x de diferença por um filtro faltando. A fixture de teste original mascarava
+   o bug (modelava `NoOp` com outcome ausente, não `Succeeded` — o comportamento real).
+
+**Achado adicional, não do `code-reviewer`, achado investigando um número estranho do braço A**:
+8 decisões atribuídas ao braço A (modo `Observe`, nunca deveria executar nada) produziram
+`HealingOutcome` real. Todas as 8 ocorrem entre 75–94s **depois** do fim nominal da janela de 25min
+da execução — contaminação sistemática na fronteira entre execuções: o sinal é carimbado com o
+`ExperimentRunId` da execução A no instante da detecção, mas a correlação (~60s) e a decisão fecham
+**depois** que o próximo `reset` já reconfigurou o Redis pra execução seguinte (a maioria decidida
+por `Llm` confirma que a execução seguinte era braço B). Verificado que **não contamina H1** (nos
+cenários afetados — F1, F3 — a recuperação do braço A já era 0% independente disso; em F2 a
+resiliência nativa já basta em todos os braços). Contamina só a taxa de ação eficaz do braço A,
+documentada como artefato (0/0 indefinido, não os 66,7% que os 3 casos não-`NoOp` produziriam se
+tomados ao pé da letra).
+
+**Achado real sobre H2, agora visível nos números**: o RuleEngine (braço C) é quase 2x mais eficaz
+que o LLM (braço B) nas ações que chegam a ser executadas — 59,7% contra 31,4% — e decide cerca de
+mil vezes mais rápido (mediana 7,6ms contra 7070ms, a etapa de decisão pooled escondia isso porque
+A+C, RuleEngine, são 72% das linhas). As taxas de ação esperada dos dois são parecidas (25,8%/26,3%
+contra 30,7%) — a diferença B×C não está em *se* decidem a ação certa, está em como ela se comporta
+depois de aplicada. McNemar sobre os 295 pares do braço B: p=0,7493, não significativo;
+concordância bruta LLM×RuleEngine de 41,36% (discordam na maioria das vezes).
+
+`docs/experiments/results.md` consolida tudo — H1, H2, as métricas novas, os achados metodológicos
+acima e as ameaças à validade (incluindo as duas divergências conscientes do DoD: F3 com 3
+`InvalidNoOnset` remanescentes, temperatura de CPU nunca capturada). Gráficos em
+`docs/experiments/campaign-output/` (4 PNG de Kaplan-Meier + `resumo.md`).
+
+**Ambiente ao fim da campanha**: modo `Observe`, réplicas do Shop de volta a 1 em cada serviço,
+Worker/API do lote encerrados pelo próprio `run-campaign.ps1`, CSVs finais (`labeled-runs.csv`,
+`discarded-runs.csv`, `paired-analysis.csv`, `decisions.csv`, `loop-latency.csv`, `mttd.csv`) e
+`results.md` commitados e no remoto.
+
+**Fase 13 (preditiva, opcional) não avaliada** — o portão de 4 condições do Master Plan exige "H1 e
+H2 já escritos na monografia... lidos pelo orientador ao menos uma vez", trabalho de redação que
+está fora do que esta sessão cobre.
+
 ## Onde encontrar
 Contratos → C:\git\norn-plano\NORN-MASTER-PLAN.md §5 (fora do repo — nunca commitado)
 ADRs → docs/adr/
@@ -1478,3 +1602,4 @@ Métricas → docs/metrics-matrix.md (nasce na Fase 4)
 Tabela de regras (golden do teste) → docs/rule-table.md (nasce na Fase 8)
 Contrato da Norn.API (rotas, DTOs, enums, eventos do hub) → docs/norn-api-contract.md (nasce na Fase 11)
 Runbook da campanha de 25h (pré-requisitos, disparo, monitoramento, parada, coleta) → docs/experiments/plano-campanha.md
+Resultados da campanha real (H1, H2, métricas complementares, achados metodológicos, ameaças à validade) → docs/experiments/results.md (nasce na Fase 12)
