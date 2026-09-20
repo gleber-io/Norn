@@ -1603,3 +1603,4 @@ Tabela de regras (golden do teste) → docs/rule-table.md (nasce na Fase 8)
 Contrato da Norn.API (rotas, DTOs, enums, eventos do hub) → docs/norn-api-contract.md (nasce na Fase 11)
 Runbook da campanha de 25h (pré-requisitos, disparo, monitoramento, parada, coleta) → docs/experiments/plano-campanha.md
 Resultados da campanha real (H1, H2, métricas complementares, achados metodológicos, ameaças à validade) → docs/experiments/results.md (nasce na Fase 12)
+Calibração da eleição de `primarySignal` (ADR-14, tarefa 5a da Fase 7) → docs/experiments/calibracao-severidade.md (fechada em sessão de revisão pós-Fase 12, reaproveitando dado do braço A da campanha)
