@@ -2,6 +2,13 @@
 # bootstrap.ps1: a validação ao vivo continua via `dotnet run` local, este Dockerfile só prova
 # que a imagem builda. Front (web/norn-dashboard) entra num estágio Node próprio, sem rodar
 # `generate:api` (exigiria a API no ar durante o build) — `src/lib/api-types.ts` já é commitado.
+#
+# Divergência assumida do Master Plan (Fase 11, tarefa 13): o texto original previa `dist/`
+# construído fora, pelo bootstrap.ps1 (dotnet build -> generate:api -> npm run build -> docker
+# build copiando dist/ já pronto), com o Dockerfile "sem Node". Como o bootstrap.ps1 nunca chegou
+# a orquestrar Worker/API (nota acima), esse desenho ficaria com um Dockerfile que não builda
+# sozinho — construir o front aqui dentro é o que mantém "docker build" funcionando isolado, ao
+# custo de reintroduzir Node na imagem. Sem efeito sobre H1/H2: este caminho não está em uso.
 FROM node:22-slim AS frontend-build
 WORKDIR /web
 COPY web/norn-dashboard/package.json web/norn-dashboard/package-lock.json ./
