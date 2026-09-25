@@ -18,6 +18,7 @@ using Norn.BuildingBlocks.Web.HealthChecks;
 using Norn.BuildingBlocks.Web.Routing;
 using Norn.Contracts.Ports;
 using Norn.Knowledge;
+using Scalar.AspNetCore;
 using StackExchange.Redis;
 
 const string DevCorsPolicy = "NornApiDev";
@@ -92,6 +93,7 @@ v1.MapGetMetricsSeries();
 
 app.MapHub<NornHub>("/hubs/norn");
 app.MapOpenApi();
+app.MapScalarApiReference();
 app.MapNornHealthChecks();
 
 // Dashboard (Fase 11): mesma origem, sem nginx (CLAUDE.md — "Dashboard é servido pela própria

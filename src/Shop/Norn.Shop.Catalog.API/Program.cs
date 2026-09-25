@@ -15,6 +15,7 @@ using Norn.Shop.Catalog.API.Features.ReserveStock;
 using Norn.Shop.Catalog.API.Infrastructure;
 using Norn.Shop.Catalog.API.Infrastructure.Seed;
 using Norn.Shop.Catalog.API.Infrastructure.Telemetry;
+using Scalar.AspNetCore;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -38,6 +39,7 @@ builder.Services.AddNornChaos(await ConnectionMultiplexer.ConnectAsync(redisConn
 builder.Services.AddNornProblemDetails();
 builder.Services.AddNornHealthChecks()
     .AddPostgresReadiness<CatalogDbContext>();
+builder.Services.AddOpenApi();
 
 builder.Services.AddNornMessaging<CatalogDbContext>(builder.Configuration, consumers =>
 {
@@ -66,6 +68,8 @@ if (!app.Environment.IsProduction())
     app.MapAdminChaos();
 }
 
+app.MapOpenApi();
+app.MapScalarApiReference();
 app.MapNornHealthChecks();
 
 app.Run();

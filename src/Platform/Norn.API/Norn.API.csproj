@@ -11,6 +11,7 @@
        Norn.Knowledge — nunca Norn.Monitor/Analyzer/Planner/Executor/Worker. O link com
        Norn.Worker é o canal Redis norn:events (ADR-15), não uma referência de projeto. -->
   <ItemGroup>
+    <PackageReference Include="Scalar.AspNetCore" />
     <PackageReference Include="StackExchange.Redis" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     <PackageReference Include="FluentValidation" />

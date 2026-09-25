@@ -14,6 +14,7 @@ using Norn.Shop.Payment.API.Features.ProcessPayment;
 using Norn.Shop.Payment.API.Infrastructure;
 using Norn.Shop.Payment.API.Infrastructure.Gateway;
 using Norn.Shop.Payment.API.Infrastructure.Telemetry;
+using Scalar.AspNetCore;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -43,6 +44,7 @@ builder.Services.AddNornChaos(redisConnectionMultiplexer, builder.Configuration,
 builder.Services.AddNornProblemDetails();
 builder.Services.AddNornHealthChecks()
     .AddPostgresReadiness<PaymentDbContext>();
+builder.Services.AddOpenApi();
 
 builder.Services.AddNornMessaging<PaymentDbContext>(builder.Configuration, consumers =>
 {
@@ -68,6 +70,8 @@ if (!app.Environment.IsProduction())
     app.MapAdminChaos();
 }
 
+app.MapOpenApi();
+app.MapScalarApiReference();
 app.MapNornHealthChecks();
 
 app.Run();
