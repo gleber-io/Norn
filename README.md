@@ -3,9 +3,9 @@
 Plataforma de autocura ("self-healing") baseada no laço MAPE-K para microsserviços em Kubernetes,
 desenvolvida como Trabalho de Conclusão de Curso do MBA em Engenharia de Software da USP/ESALQ.
 
-**Monografia:** *Autocura de microsserviços em Kubernetes: planejamento por modelo de linguagem
-versus regras determinísticas* — Gléber Michel Alves Schiavo; orientação de Elaine Barbosa de
-Figueiredo.
+**Monografia:** *Autocura de microsserviços em Kubernetes: comparação entre planejamento por modelo
+de linguagem e regras determinísticas* — Gléber Michel Alves Schiavo; orientação de Elaine Barbosa
+de Figueiredo.
 
 O trabalho compara, em experimento controlado com três braços (controle sem atuação, decisão por
 modelo de linguagem local e decisão por tabela de regras) e quatro famílias de falha injetadas, se o
@@ -48,6 +48,9 @@ o controle) e H2 (modelo de linguagem contra regras).
 - **Resumo gerado pela análise e curvas de sobrevivência:**
   [`docs/experiments/campaign-output/`](docs/experiments/campaign-output/) — `resumo.md`, gráficos
   de Kaplan-Meier e a planilha `kaplan-meier.xlsx` usada nas figuras da monografia.
+- **Capturas de tela do painel reproduzidas no Apêndice B da monografia:**
+  [`docs/experiments/campaign-output/capturas/`](docs/experiments/campaign-output/capturas/) —
+  originais das quatro execuções ilustradas, feitas ao término de cada execução.
 
 ### Reproduzir a análise
 
