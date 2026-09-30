@@ -10,14 +10,18 @@ from pathlib import Path
 from campaign_metrics import (
     decision_latency_by_arm,
     effective_action_rate,
+    effective_action_rate_by_type,
     expected_action_rate,
+    fallback_by_scenario,
     fallback_reasons_table,
     load_decisions,
     load_loop_latency,
     load_mttd,
     loop_latency_summary,
     mttd_summary,
+    restoration_per_decision,
 )
+from cluster_bootstrap import effective_rate_difference_ci, paired_accuracy_difference_ci
 from paired_mcnemar import load_paired, mcnemar_result, raw_agreement_rate
 from survival_analysis import (
     fisher_recovery_rate,
@@ -26,6 +30,21 @@ from survival_analysis import (
     logrank_by_scenario,
     recovery_rate_table,
 )
+from valid_runs import RUN_KEY, filter_paired_to_valid_runs, filter_to_valid_runs
+
+PAIRED_RUN_KEY = ["experiment_run_id"]
+
+
+def _restrict(df, labeled_df, filter_fn, run_key: list[str], name: str):
+    """Aplica o filtro de execuções válidas; falha se ele esvaziar uma entrada não vazia (chaves que
+    não batem com o labeled-runs.csv) e devolve a linha de relatório com o que saiu."""
+    filtered = filter_fn(df, labeled_df)
+    if len(df) and filtered.empty:
+        raise ValueError(f"{name}: nenhuma linha bate com as execuções do labeled-runs.csv")
+    runs_removed = len(df[run_key].drop_duplicates()) - len(filtered[run_key].drop_duplicates())
+    note = (f"_{name}: {len(filtered)} linhas de execuções válidas; {len(df) - len(filtered)} linhas de "
+            f"{runs_removed} execuções descartadas removidas._")
+    return filtered, note
 
 
 def main() -> None:
@@ -69,26 +88,39 @@ def main() -> None:
         lines.append("")
 
     if args.paired:
-        paired_df = load_paired(args.paired)
-        result = mcnemar_result(paired_df)
-        agreement = raw_agreement_rate(paired_df)
-
         lines.append("## H2 — recálculo pareado (LLM x RuleEngine, braço B)")
         lines.append("")
-        lines.append(f"- Pares: {len(paired_df)}")
+        paired_df, note = _restrict(load_paired(args.paired), labeled_df, filter_paired_to_valid_runs,
+                                    PAIRED_RUN_KEY, "paired-analysis")
+        lines.extend([note, ""])
+        result = mcnemar_result(paired_df)
+        agreement = raw_agreement_rate(paired_df)
+        cluster = paired_accuracy_difference_ci(paired_df)
+
+        lines.append(f"- Pares: {len(paired_df)} (de {paired_df['experiment_run_id'].nunique()} execuções)")
+        lines.append(
+            f"- Acerto da ação de referência: LLM {int(paired_df['llm_matches_reference'].sum())}/{len(paired_df)}, "
+            f"RuleEngine {int(paired_df['rule_matches_reference'].sum())}/{len(paired_df)}"
+        )
         lines.append(f"- Concordância bruta LLM x RuleEngine: {agreement:.4f}")
         lines.append(f"- McNemar: estatística={result['statistic']:.4f}, p={result['p_value']:.4f}")
         lines.append(
             f"- Tabela: ambos certos={result['both_correct']}, só LLM certo={result['only_llm_correct']}, "
             f"só regra certa={result['only_rule_correct']}, ambos errados={result['both_wrong']}"
         )
+        lines.append(
+            f"- Diferença de acerto (LLM − RuleEngine) com IC 95% por bootstrap agrupado por execução: "
+            f"{cluster['diferenca']:.4f} [{cluster['ic95_low']:.4f}; {cluster['ic95_high']:.4f}] "
+            f"({cluster['execucoes']} execuções reamostradas)"
+        )
         lines.append("")
 
     if args.decisions:
-        decisions_df = load_decisions(args.decisions)
-
         lines.append("## Taxa de ação esperada e taxa de ação eficaz (ITT x por protocolo)")
         lines.append("")
+        decisions_df, note = _restrict(load_decisions(args.decisions), labeled_df, filter_to_valid_runs,
+                                       RUN_KEY, "decisions")
+        lines.extend([note, ""])
         lines.append(
             "\"Por protocolo\" no braço B restringe às decisões sem nenhum FailureReason do LLM "
             "registrado (LlmTrace.FailureReasons vazio) — DecidedBy sozinho não serve de filtro "
@@ -106,6 +138,24 @@ def main() -> None:
         lines.append(effective_action_rate(decisions_df).to_string(index=False))
         lines.append("```")
         lines.append("")
+        eff_ci = effective_rate_difference_ci(decisions_df)
+        lines.append(
+            f"Diferença de ação eficaz C − B com IC 95% por bootstrap agrupado por execução: "
+            f"{eff_ci['diferenca']:.4f} [{eff_ci['ic95_low']:.4f}; {eff_ci['ic95_high']:.4f}]. "
+            "Medida descritiva, condicionada às ações que cada braço escolheu executar:"
+        )
+        lines.append("```")
+        lines.append(effective_action_rate_by_type(decisions_df).to_string(index=False))
+        lines.append("```")
+        lines.append("")
+        lines.append(
+            "Restauração verificada ÷ total de decisões do braço — denominador independente da composição "
+            "das ações, mas não do número de decisões por execução de cada braço; não é inversão da taxa acima:"
+        )
+        lines.append("```")
+        lines.append(restoration_per_decision(decisions_df).to_string(index=False))
+        lines.append("```")
+        lines.append("")
 
         lines.append("## Taxa de fallback do LLM decomposta por motivo (braço B)")
         lines.append("")
@@ -116,13 +166,19 @@ def main() -> None:
             lines.append("```")
             lines.append(fallback_table.to_string(index=False))
             lines.append("```")
+            lines.append("")
+            lines.append("Decisões com contingência (ao menos um motivo), por cenário:")
+            lines.append("```")
+            lines.append(fallback_by_scenario(decisions_df).to_string(index=False))
+            lines.append("```")
         lines.append("")
 
     if args.loop_latency:
-        loop_df = load_loop_latency(args.loop_latency)
-
         lines.append("## Latência do loop, decomposta em quatro etapas (mediana + IC 95%, ms)")
         lines.append("")
+        loop_df, note = _restrict(load_loop_latency(args.loop_latency), labeled_df, filter_to_valid_runs,
+                                  RUN_KEY, "loop-latency")
+        lines.extend([note, ""])
         lines.append(
             "A etapa de correlação inclui a janela de 60s da Fase 7 por desenho — é latência de "
             "projeto, não ineficiência do laço (Master Plan §3)."
@@ -143,10 +199,10 @@ def main() -> None:
         lines.append("")
 
     if args.mttd:
-        mttd_df = load_mttd(args.mttd)
-
         lines.append("## MTTD — tempo até a detecção (mediana + IC 95%, segundos)")
         lines.append("")
+        mttd_df, note = _restrict(load_mttd(args.mttd), labeled_df, filter_to_valid_runs, RUN_KEY, "mttd")
+        lines.extend([note, ""])
         lines.append("```")
         lines.append(mttd_summary(mttd_df).to_string(index=False))
         lines.append("```")

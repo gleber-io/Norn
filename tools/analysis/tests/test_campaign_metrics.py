@@ -9,7 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from campaign_metrics import (  # noqa: E402
     decision_latency_by_arm,
     effective_action_rate,
+    effective_action_rate_by_type,
     expected_action_rate,
+    fallback_by_scenario,
     fallback_reasons_table,
     load_decisions,
     load_loop_latency,
@@ -17,6 +19,7 @@ from campaign_metrics import (  # noqa: E402
     loop_latency_summary,
     median_with_ci,
     mttd_summary,
+    restoration_per_decision,
 )
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
@@ -200,6 +203,40 @@ class MttdTests(unittest.TestCase):
         self.assertEqual(n, 1)
         self.assertTrue(pd.isna(low))
         self.assertTrue(pd.isna(high))
+
+
+class FallbackByScenarioTests(unittest.TestCase):
+    def test_counts_decisions_not_stacked_reasons(self) -> None:
+        # Braço B na fixture: plans 3, 7 e 9 têm motivo registrado (o 7 tem dois) -> 3 decisões de 5.
+        table = fallback_by_scenario(load_decisions(DECISIONS))
+
+        f2 = table[table["scenario"] == "F2"].iloc[0]
+        total = table[table["scenario"] == "total"].iloc[0]
+        self.assertEqual((f2["com_contingencia"], f2["decisoes"]), (3, 5))
+        self.assertEqual((total["com_contingencia"], total["decisoes"]), (3, 5))
+
+
+class EffectiveActionRateByTypeTests(unittest.TestCase):
+    def test_splits_executed_actions_by_type(self) -> None:
+        # B: ScaleUp executado nos plans 2 (restaurou), 4 (Failed) e 9 (restaurou); NoOp e Rejected fora.
+        table = effective_action_rate_by_type(load_decisions(DECISIONS))
+
+        def row(arm: str, action: str):
+            return table[(table["braco"] == arm) & (table["acao"] == action)].iloc[0]
+
+        self.assertEqual((row("B", "ScaleUp")["restauradas"], row("B", "ScaleUp")["executadas"]), (2, 3))
+        self.assertEqual((row("C", "ScaleUp")["restauradas"], row("C", "ScaleUp")["executadas"]), (1, 1))
+        self.assertEqual(row("B", "RestartPod")["executadas"], 0)
+
+
+class RestorationPerDecisionTests(unittest.TestCase):
+    def test_denominator_is_every_decision_of_the_arm(self) -> None:
+        table = restoration_per_decision(load_decisions(DECISIONS))
+
+        b = table[table["braco"] == "B"].iloc[0]
+        c = table[table["braco"] == "C"].iloc[0]
+        self.assertEqual((b["restauradas"], b["decisoes"]), (2, 5))
+        self.assertEqual((c["restauradas"], c["decisoes"]), (1, 2))
 
 
 if __name__ == "__main__":

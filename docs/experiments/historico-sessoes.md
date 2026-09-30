@@ -1536,3 +1536,18 @@ Worker/API do lote encerrados pelo próprio `run-campaign.ps1`, CSVs finais (`la
 H2 já escritos na monografia... lidos pelo orientador ao menos uma vez", trabalho de redação que
 está fora do que esta sessão cobre.
 
+**Sessão de revisão da monografia (29/09/2026) — métricas complementares restritas às 57 execuções
+válidas.** Ao conferir os números da monografia contra os CSV, apareceram duas inconsistências no
+`results.md`. (1) `decisions.csv`, `loop-latency.csv` e `paired-analysis.csv` incluíam as 3
+execuções `InvalidNoOnset` de F3 (54 decisões, 14 pares), contradizendo o "57 execuções válidas"; e a
+contingência do LLM era relatada como soma de motivos (16,0%), não como fração de decisões (13,5%).
+(2) O `resumo.md` e o log-rank de F5 ainda eram da versão do `labeled-runs.csv` anterior à remoção das
+3 execuções-piloto (F5 p=0,718 → 0,676). Correção em `tools/analysis/`: `valid_runs.py` filtra toda
+entrada complementar pelo `labeled-runs.csv` (fronteira do Labeler) e `cluster_bootstrap.py` dá IC
+por bootstrap agrupado por execução para a diferença pareada de acerto (−1,4 p.p. [−8,6; +5,5]) e
+para a diferença de ação eficaz C − B (27,2 p.p. [13,2; 41,7]), com `campaign_metrics.py` ganhando
+ação eficaz por tipo de ação, contingência por cenário e restauração por decisão. A leitura da ação
+eficaz mudou de "RuleEngine quase 2x mais eficaz" para diferença descritiva, condicionada e em boa
+parte de composição: o LLM escolheu `RestartPod` em 49% das ações executadas contra 25% do
+RuleEngine, e o `RestartPod` restaurou em 5 de 74. Nenhuma conclusão mudou de direção. `results.md`
+(achado metodológico 8) e `resumo.md` regenerados com os números que a monografia relata.

@@ -36,6 +36,22 @@ ACTION_TYPE_NAMES = {0: "ScaleUp", 1: "RestartPod", 2: "ToggleFeatureFlag", 3: "
 # e continua contando como "ação executada" para a taxa de ação eficaz (Master Plan §3).
 EXECUTED_STATUSES = {"Succeeded", "PartiallyApplied", "Failed"}
 
+# MasterSeed da campanha — mesma semente para todo bootstrap da análise.
+MASTER_SEED = 20260919
+
+
+def executed_actions(decisions_df: pd.DataFrame) -> pd.DataFrame:
+    """Ações executadas de verdade: status de execução real e tipo diferente de NoOp (achado 6 do
+    results.md — NoOp devolve Succeeded sem tocar o cluster). Definição única do denominador da
+    taxa de ação eficaz, usada pela tabela e pelo bootstrap."""
+    return decisions_df[
+        decisions_df["outcome_status"].isin(EXECUTED_STATUSES) & (decisions_df["action_name"] != "NoOp")
+    ]
+
+
+def restored_count(df: pd.DataFrame) -> int:
+    return int(df["slo_restored"].fillna(False).sum())
+
 
 def load_decisions(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
@@ -87,7 +103,7 @@ def median_with_ci(values: pd.Series, confidence: float = 0.95) -> tuple[float, 
     if n < 2:
         return (float(clean.iloc[0]) if n == 1 else float("nan"), float("nan"), float("nan"), n)
     result = stats.bootstrap(
-        (clean.to_numpy(),), np.median, confidence_level=confidence, method="percentile", random_state=20260919
+        (clean.to_numpy(),), np.median, confidence_level=confidence, method="percentile", random_state=MASTER_SEED
     )
     return (float(np.median(clean)), float(result.confidence_interval.low), float(result.confidence_interval.high), n)
 
@@ -159,14 +175,14 @@ def effective_action_rate(decisions_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for arm in ["A", "B", "C"]:
         subset = decisions_df[decisions_df["arm"] == arm]
-        executed = subset[subset["outcome_status"].isin(EXECUTED_STATUSES) & (subset["action_name"] != "NoOp")]
-        restored, total = int(executed["slo_restored"].fillna(False).sum()), len(executed)
+        executed = executed_actions(subset)
+        restored, total = restored_count(executed), len(executed)
         low, high = _wilson_ci(restored, total)
         rows.append({"braco": arm, "protocolo": "ITT", "restauradas": restored, "executadas": total, "taxa": restored / total if total else float("nan"), "ic95_low": low, "ic95_high": high})
 
         if arm == "B":
             pp = executed[executed["n_failure_reasons"] == 0]
-            restored_pp, total_pp = int(pp["slo_restored"].fillna(False).sum()), len(pp)
+            restored_pp, total_pp = restored_count(pp), len(pp)
             low_pp, high_pp = _wilson_ci(restored_pp, total_pp)
             rows.append({"braco": arm, "protocolo": "por_protocolo", "restauradas": restored_pp, "executadas": total_pp, "taxa": restored_pp / total_pp if total_pp else float("nan"), "ic95_low": low_pp, "ic95_high": high_pp})
     return pd.DataFrame(rows)
@@ -182,4 +198,45 @@ def fallback_reasons_table(decisions_df: pd.DataFrame) -> pd.DataFrame:
         counter.update(reasons)
 
     rows = [{"motivo": reason, "ocorrencias": count, "pct_das_decisoes_b": count / total_b} for reason, count in counter.most_common()]
+    return pd.DataFrame(rows)
+
+
+def fallback_by_scenario(decisions_df: pd.DataFrame) -> pd.DataFrame:
+    """Decisões do braço B com pelo menos um FailureReason (contingência), por cenário — a soma dos
+    motivos da tabela acima pode passar do número de decisões, esta contagem não."""
+    arm_b = decisions_df[decisions_df["arm"] == "B"]
+    rows = []
+    for scenario in sorted(arm_b["scenario"].unique()):
+        subset = arm_b[arm_b["scenario"] == scenario]
+        with_fallback = int((subset["n_failure_reasons"] > 0).sum())
+        rows.append({"scenario": scenario, "com_contingencia": with_fallback, "decisoes": len(subset)})
+    total = int((arm_b["n_failure_reasons"] > 0).sum())
+    rows.append({"scenario": "total", "com_contingencia": total, "decisoes": len(arm_b)})
+    return pd.DataFrame(rows)
+
+
+def effective_action_rate_by_type(decisions_df: pd.DataFrame) -> pd.DataFrame:
+    """Ação eficaz separada por tipo de ação — os braços executam conjuntos diferentes de ações, e a
+    taxa agregada de `effective_action_rate` mistura composição com eficácia de cada ação."""
+    executed = executed_actions(decisions_df)
+    rows = []
+    for arm in ["B", "C"]:
+        for action in ["RestartPod", "ScaleUp", "ToggleFeatureFlag"]:
+            subset = executed[(executed["arm"] == arm) & (executed["action_name"] == action)]
+            restored, total = restored_count(subset), len(subset)
+            rows.append({"braco": arm, "acao": action, "restauradas": restored, "executadas": total,
+                         "taxa": restored / total if total else float("nan")})
+    return pd.DataFrame(rows)
+
+
+def restoration_per_decision(decisions_df: pd.DataFrame) -> pd.DataFrame:
+    """Decisões seguidas de restauração verificada ÷ total de decisões do braço — o denominador não
+    depende de quantas ações cada mecanismo escolheu executar, mas depende de quantas decisões cada
+    braço produz por execução — não é leitura invertida da taxa de ação eficaz."""
+    rows = []
+    for arm in ["B", "C"]:
+        subset = decisions_df[decisions_df["arm"] == arm]
+        restored = restored_count(executed_actions(subset))
+        rows.append({"braco": arm, "restauradas": restored, "decisoes": len(subset),
+                     "taxa": restored / len(subset) if len(subset) else float("nan")})
     return pd.DataFrame(rows)

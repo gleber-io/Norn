@@ -1,10 +1,10 @@
 run_order,scenario,arm,termination_state,plan_id,decided_by,action_type,n_failure_reasons,failure_reasons,outcome_status,slo_restored
-1,F2,A,Recovered,00000000-0000-0000-0000-000000000001,RuleEngine,0,0,[],,
-8,F2,A,Recovered,00000000-0000-0000-0000-000000000008,RuleEngine,0,0,[],,
-2,F2,B,Recovered,00000000-0000-0000-0000-000000000002,Llm,0,0,[],Succeeded,true
-3,F2,B,Recovered,00000000-0000-0000-0000-000000000003,RuleEngine,3,1,"[""Timeout""]",Succeeded,false
-4,F2,B,Recovered,00000000-0000-0000-0000-000000000004,Llm,0,0,[],Failed,false
-7,F2,B,Recovered,00000000-0000-0000-0000-000000000007,RuleEngine,2,2,"[""Timeout"", ""InvalidJson""]",Rejected,false
-9,F2,B,Recovered,00000000-0000-0000-0000-000000000009,RuleEngine,0,1,"[""Timeout""]",Succeeded,true
-5,F2,C,Recovered,00000000-0000-0000-0000-000000000005,RuleEngine,0,0,[],Succeeded,true
-6,F2,C,Recovered,00000000-0000-0000-0000-000000000006,Fallback,3,0,[],Succeeded,false
+7,F2,A,Recovered,00000000-0000-0000-0000-000000000001,RuleEngine,0,0,[],,
+10,F2,A,Recovered,00000000-0000-0000-0000-000000000008,RuleEngine,0,0,[],,
+8,F2,B,Recovered,00000000-0000-0000-0000-000000000002,Llm,0,0,[],Succeeded,true
+8,F2,B,Recovered,00000000-0000-0000-0000-000000000003,RuleEngine,3,1,"[""Timeout""]",Succeeded,false
+11,F2,B,Recovered,00000000-0000-0000-0000-000000000004,Llm,0,0,[],Failed,false
+11,F2,B,Recovered,00000000-0000-0000-0000-000000000007,RuleEngine,2,2,"[""Timeout"", ""InvalidJson""]",Rejected,false
+11,F2,B,Recovered,00000000-0000-0000-0000-000000000009,RuleEngine,0,1,"[""Timeout""]",Succeeded,true
+9,F2,C,Recovered,00000000-0000-0000-0000-000000000005,RuleEngine,0,0,[],Succeeded,true
+12,F2,C,Recovered,00000000-0000-0000-0000-000000000006,Fallback,3,0,[],Succeeded,false
