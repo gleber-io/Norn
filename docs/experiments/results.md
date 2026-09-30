@@ -2,7 +2,9 @@
 
 ## Reprodutibilidade
 
-- **Tag git**: `campaign-h1h2` (anotada) — congela o commit cujo código produziu este dataset.
+- **Tag git**: `campaign-h1h2` (anotada) — congela o commit cujo código executou a campanha. O
+  dataset curado (57 válidas) e a análise que produzem os números deste documento e da monografia
+  são posteriores à tag (remoção das execuções-piloto e achado metodológico 8), no `master`.
 - **MasterSeed**: `20260919` (sorteio dos blocos, gravado em `experiment_runs.randomization_seed`).
 - **Modelo LLM**: `norn-qwen` (Qwen3 4B Instruct-2507, quantização Q4_K_M), digest
   `sha256:85e4a5b7b8ef0e48af0e8658f5aaab9c2324c76c1641493f4d1e25fce54b18b9`.
@@ -18,6 +20,9 @@
   inteiro contra ele antes de rodar contra produção — ver "Achados metodológicos" abaixo.
 - Gráficos em `docs/experiments/campaign-output/` (`resumo.md` + 4 PNG de Kaplan-Meier), gerados por
   `tools/analysis/analyze.py --labeled ... --paired ... --decisions ... --loop-latency ... --mttd ...`.
+  As figuras da monografia vêm de `campaign-output/kaplan-meier.xlsx`: dados do `labeled-runs.csv`
+  copiados como valor, S(t) calculado por fórmula e gráfico nativo da planilha; não é gerada pelo
+  `analyze.py`, mas chega aos mesmos valores de S(t).
 - **Todas as análises complementares são restritas às 57 execuções válidas** (`valid_runs.py`, com o
   `labeled-runs.csv` como fronteira) e os intervalos sobre contextos/ações agrupados por execução usam
   bootstrap por agrupamento com semente fixa (`cluster_bootstrap.py`, 10.000 réplicas, semente
@@ -36,6 +41,13 @@ deriva de configuração de recurso no meio da campanha).
 | F2 (esgotamento de pool) | 15/15 | 0 |
 | F3 (latência do gateway) | 12/15 | 3 |
 | F5 (controle negativo) | 15/15 | 0 |
+
+`discarded-runs.csv` tem 6 linhas: os 3 descartes da campanha acima (F3/C rep. 5, F3/B rep. 4 e
+F3/C rep. 3, as 3 últimas) e, nas 3 primeiras, execuções-piloto anteriores à campanha, mantidas de
+propósito para comparação antes/depois das correções — duas de F1/C com carga fora de ±10% e a
+F3/B que saiu `InvalidNoOnset` antes de o Labeler ganhar o critério de onset por latência. Elas
+repetem as coordenadas F1/C rep. 1 e F3/B rep. 1, cujas execuções da campanha estão em
+`labeled-runs.csv`; distinguem-se pelo `experiment_run_id`.
 
 ## H1 — o loop de self-healing recupera mais rápido que a ausência de atuação?
 
